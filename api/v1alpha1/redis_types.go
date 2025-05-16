@@ -28,6 +28,12 @@ type RedisSpec struct {
 	// Docker image to deploy, defaults to bitnami/redis:8.0
 	// +optional
 	Image string `json:"image,omitempty"`
+	// Resources defines resource requests and limits
+	// +optional
+	Resources ResourceSpec `json:"resources,omitempty"`
+	// Storage enables persistence - If Point-in-time snapshots are there
+	// +optional
+	Persistence PersistenceSpec `json:"persistence,omitempty"`
 }
 
 // RedisStatus defines the observed state of Redis
