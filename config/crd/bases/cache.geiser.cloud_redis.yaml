@@ -44,16 +44,56 @@ spec:
               image:
                 description: Docker image to deploy, defaults to bitnami/redis:8.0
                 type: string
+              persistence:
+                description: Storage enables persistence - If Point-in-time snapshots
+                  are there
+                properties:
+                  enabled:
+                    type: boolean
+                  size:
+                    type: string
+                  storageClass:
+                    type: string
+                type: object
               replicas:
                 description: Number of Redis instances to deploy
                 format: int32
                 minimum: 1
                 type: integer
+              resources:
+                description: Resources defines resource requests and limits
+                properties:
+                  limits:
+                    description: ResourceList details resource units
+                    properties:
+                      cpu:
+                        type: string
+                      memory:
+                        type: string
+                    type: object
+                  requests:
+                    description: ResourceList details resource units
+                    properties:
+                      cpu:
+                        type: string
+                      memory:
+                        type: string
+                    type: object
+                type: object
             required:
             - replicas
             type: object
           status:
             description: RedisStatus defines the observed state of Redis
+            properties:
+              message:
+                type: string
+              nodes:
+                items:
+                  type: string
+                type: array
+              status:
+                type: string
             type: object
         type: object
     served: true

@@ -23,6 +23,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -136,6 +137,27 @@ func (r *RedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	}
 
+	// Check and reconcile resources requirements
+	if needsResourceUpdate(*deployment, *redis) {
+		log.Info("Resource requirements updated, reconciling deployment", "Deployment.Name", deploymentName)
+		updatedDeployment := r.deploymentForRedis(redis, deploymentName)
+		deployment.Spec.Template.Spec = updatedDeployment.Spec.Template.Spec
+		if err := r.Update(ctx, deployment); err != nil {
+			log.Error(err, "Failed updating deployment resources")
+			return ctrl.Result{}, err
+		}
+		log.Info("Deployment updated successfully with new resources. Pods restarting..")
+		return ctrl.Result{RequeueAfter: time.Minute}, nil
+	}
+
+	// Check and reconcile persistence PVC
+	if redis.Spec.Persistence.Enabled {
+		if err := r.reconcilePersistence(ctx, redis); err != nil {
+			log.Error(err, "Failed reconciling persistence")
+			return ctrl.Result{}, err
+		}
+	}
+
 	return ctrl.Result{}, nil
 }
 
@@ -163,8 +185,58 @@ func (r *RedisReconciler) deploymentForRedis(redis *cachev1alpha1.Redis, deploym
 		"app": redis.Name,
 	}
 	replicas := redis.Spec.Replicas
-	secretName := redis.Name + "-secret" // clearly match the exact secret name we created above
+	secretName := redis.Name + "-secret"
 
+	// Container definition with resources
+	container := corev1.Container{
+		Name:  "redis",
+		Image: redis.Spec.Image,
+		Ports: []corev1.ContainerPort{
+			{ContainerPort: 6379},
+		},
+		Env: []corev1.EnvVar{
+			{
+				Name: "REDIS_PASSWORD",
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
+						Key:                  "password",
+					},
+				},
+			},
+		},
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				"cpu":    resource.MustParse(redis.Spec.Resources.Requests.CPU),
+				"memory": resource.MustParse(redis.Spec.Resources.Requests.Memory),
+			},
+			Limits: corev1.ResourceList{
+				"cpu":    resource.MustParse(redis.Spec.Resources.Limits.CPU),
+				"memory": resource.MustParse(redis.Spec.Resources.Limits.Memory),
+			},
+		},
+	}
+
+	// Handle persistence
+	podVolumes := []corev1.Volume{}
+	if redis.Spec.Persistence.Enabled {
+		podVolumes = append(podVolumes, corev1.Volume{
+			Name: "redis-data",
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: redis.Name + "-pvc",
+				},
+			},
+		})
+		container.VolumeMounts = []corev1.VolumeMount{
+			{
+				Name:      "redis-data",
+				MountPath: "/data",
+			},
+		}
+	}
+
+	// Deployment creation
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      deploymentName,
@@ -180,36 +252,64 @@ func (r *RedisReconciler) deploymentForRedis(redis *cachev1alpha1.Redis, deploym
 					Labels: labels,
 				},
 				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
-						{
-							Name:  "redis",
-							Image: redis.Spec.Image,
-							Ports: []corev1.ContainerPort{
-								{
-									ContainerPort: 6379,
-								},
-							},
-							Env: []corev1.EnvVar{
-								{
-									Name: "REDIS_PASSWORD",
-									ValueFrom: &corev1.EnvVarSource{
-										SecretKeyRef: &corev1.SecretKeySelector{
-											LocalObjectReference: corev1.LocalObjectReference{
-												Name: secretName, // Using the defined secret
-											},
-											Key: "password", // As we defined earlier
-										},
-									},
-								},
-							},
-						},
-					},
+					Volumes:    podVolumes,
+					Containers: []corev1.Container{container},
 				},
 			},
 		},
 	}
 
 	ctrl.SetControllerReference(redis, deployment, r.Scheme)
-
 	return deployment
+}
+
+func needsResourceUpdate(existing appsv1.Deployment, redis cachev1alpha1.Redis) bool {
+	container := existing.Spec.Template.Spec.Containers[0]
+	reqCpu := resource.MustParse(redis.Spec.Resources.Requests.CPU)
+	reqMem := resource.MustParse(redis.Spec.Resources.Requests.Memory)
+	limCpu := resource.MustParse(redis.Spec.Resources.Limits.CPU)
+	limMem := resource.MustParse(redis.Spec.Resources.Limits.Memory)
+
+	return container.Resources.Requests["cpu"] != reqCpu ||
+		container.Resources.Requests["memory"] != reqMem ||
+		container.Resources.Limits["cpu"] != limCpu ||
+		container.Resources.Limits["memory"] != limMem
+}
+
+func (r *RedisReconciler) reconcilePersistence(ctx context.Context, redis *cachev1alpha1.Redis) error {
+	if !redis.Spec.Persistence.Enabled {
+		return nil
+	}
+
+	pvcName := redis.Name + "-pvc"
+	pvc := &corev1.PersistentVolumeClaim{}
+	err := r.Get(ctx, types.NamespacedName{Name: pvcName, Namespace: redis.Namespace}, pvc)
+	if err != nil && errors.IsNotFound(err) {
+		// No existing PVC, create it
+		storageQuantity, err := resource.ParseQuantity(redis.Spec.Persistence.Size)
+		if err != nil {
+			return err
+		}
+		pvc = &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      pvcName,
+				Namespace: redis.Namespace,
+			},
+			Spec: corev1.PersistentVolumeClaimSpec{
+				AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+				StorageClassName: &redis.Spec.Persistence.StorageClass,
+				Resources: corev1.VolumeResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceStorage: storageQuantity,
+					},
+				},
+			},
+		}
+		ctrl.SetControllerReference(redis, pvc, r.Scheme)
+		return r.Create(ctx, pvc)
+	} else if err != nil {
+		return err
+	}
+	// Note: resizing PVC downward is unsafe—here, conservatively do nothing if requested size smaller.
+	return nil
 }
