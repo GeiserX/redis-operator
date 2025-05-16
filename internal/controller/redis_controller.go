@@ -18,8 +18,18 @@ package controller
 
 import (
 	"context"
+	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+
+	"crypto/rand"
+	"encoding/base64"
+
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -39,17 +49,83 @@ type RedisReconciler struct {
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the Redis object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.19.0/pkg/reconcile
 func (r *RedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
+	log := log.FromContext(ctx)
 
-	// TODO(user): your logic here
+	// Fetch the Redis instance (the CR)
+	redis := &cachev1alpha1.Redis{}
+	if err := r.Get(ctx, req.NamespacedName, redis); err != nil {
+		if errors.IsNotFound(err) {
+			log.Info("Redis resource not found. Ignoring since object must be deleted")
+			return ctrl.Result{}, nil
+		}
+		log.Error(err, "Failed to get Redis")
+		return ctrl.Result{}, err
+	}
+
+	// Secret password
+	secretName := redis.Name + "-secret"
+	secret := &corev1.Secret{}
+	err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: redis.Namespace}, secret)
+	if err != nil && errors.IsNotFound(err) {
+		// Secret does not exist. Let's create it.
+		password, err := generateRandomPassword(20)
+		if err != nil {
+			log.Error(err, "Failed to generate random password")
+			return ctrl.Result{}, err
+		}
+
+		secret = &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      secretName,
+				Namespace: redis.Namespace,
+			},
+			StringData: map[string]string{
+				"password": password,
+			},
+		}
+
+		// set Redis CR as the owner
+		if err := ctrl.SetControllerReference(redis, secret, r.Scheme); err != nil {
+			log.Error(err, "Failed to set owner reference for secret")
+			return ctrl.Result{}, err
+		}
+
+		if err := r.Create(ctx, secret); err != nil {
+			log.Error(err, "Failed to create Redis Secret", "Secret.Name", secretName)
+			return ctrl.Result{}, err
+		}
+
+		log.Info("Created new Redis Secret", "Secret.Name", secretName)
+		// Requeue to immediately move to next reconcile step (deployment creation/update)
+		return ctrl.Result{Requeue: true}, nil
+	} else if err != nil {
+		log.Error(err, "Failed to get Redis Secret")
+		return ctrl.Result{}, err
+	}
+
+	// Define desired Deployment name
+	deploymentName := redis.Name + "-deployment"
+
+	// Check if Deployment already exists
+	deployment := &appsv1.Deployment{}
+	err = r.Get(ctx, types.NamespacedName{Name: deploymentName, Namespace: redis.Namespace}, deployment)
+	if err != nil && errors.IsNotFound(err) {
+		// No Deployment exists, create one
+		log.Info("Creating new Deployment", "Deployment.Namespace", redis.Namespace, "Deployment.Name", deploymentName)
+		deployment = r.deploymentForRedis(redis, deploymentName)
+		if err = r.Create(ctx, deployment); err != nil {
+			log.Error(err, "Failed to create Deployment", "Deployment.Namespace", deployment.Namespace, "Deployment.Name", deployment.Name)
+			return ctrl.Result{}, err
+		}
+		// After successful creation, reconcile soon again
+		return ctrl.Result{RequeueAfter: time.Minute}, nil
+	} else if err != nil {
+		log.Error(err, "Failed to get Deployment")
+		return ctrl.Result{}, err
+	}
+
+	// TODO: Scale/update deployment if necessary (next steps after confirming creation works)
 
 	return ctrl.Result{}, nil
 }
@@ -59,4 +135,59 @@ func (r *RedisReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&cachev1alpha1.Redis{}).
 		Complete(r)
+}
+
+// generateRandomPassword creates a secure random string of specified length
+func generateRandomPassword(length int) (string, error) {
+	randomBytes := make([]byte, length)
+	_, err := rand.Read(randomBytes)
+	if err != nil {
+		return "", err
+	}
+	// Base64 encode the random bytes to ensure password is printable
+	return base64.StdEncoding.EncodeToString(randomBytes)[:length], nil
+}
+
+// deploymentForRedis returns a Redis Deployment object
+func (r *RedisReconciler) deploymentForRedis(redis *cachev1alpha1.Redis, deploymentName string) *appsv1.Deployment {
+	labels := map[string]string{
+		"app": redis.Name,
+	}
+	replicas := redis.Spec.Replicas
+
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      deploymentName,
+			Namespace: redis.Namespace,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: labels,
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: labels,
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "redis",
+							Image: redis.Spec.Image,
+							Ports: []corev1.ContainerPort{
+								{
+									ContainerPort: 6379,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Associate deployment explicitly with Redis instance for automatic garbage collection
+	ctrl.SetControllerReference(redis, deployment, r.Scheme)
+
+	return deployment
 }
