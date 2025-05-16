@@ -120,6 +120,21 @@ var _ = Describe("deploymentForRedis", func() {
 				Spec: cachev1alpha1.RedisSpec{
 					Replicas: 3,
 					Image:    "bitnami/redis:7",
+					Resources: cachev1alpha1.ResourceSpec{
+						Requests: cachev1alpha1.ResourceList{
+							CPU:    "100m",
+							Memory: "128Mi",
+						},
+						Limits: cachev1alpha1.ResourceList{
+							CPU:    "250m",
+							Memory: "256Mi",
+						},
+					},
+					Persistence: cachev1alpha1.PersistenceSpec{
+						Enabled:      true,
+						StorageClass: "standard",
+						Size:         "1Gi",
+					},
 				},
 			}
 
@@ -163,6 +178,21 @@ var _ = Describe("Redis Reconcile - Update Handling", func() {
 				Spec: cachev1alpha1.RedisSpec{
 					Replicas: 2,
 					Image:    "bitnami/redis:8.0",
+					Resources: cachev1alpha1.ResourceSpec{
+						Requests: cachev1alpha1.ResourceList{
+							CPU:    "100m",
+							Memory: "128Mi",
+						},
+						Limits: cachev1alpha1.ResourceList{
+							CPU:    "250m",
+							Memory: "256Mi",
+						},
+					},
+					Persistence: cachev1alpha1.PersistenceSpec{
+						Enabled:      true,
+						StorageClass: "standard",
+						Size:         "1Gi",
+					},
 				},
 			}
 			Expect(k8sClient.Create(ctx, redis)).Should(Succeed())

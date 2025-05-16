@@ -36,10 +36,30 @@ type RedisSpec struct {
 	Persistence PersistenceSpec `json:"persistence,omitempty"`
 }
 
+// ResourceSpec defines CPU and memory requests/limits
+type ResourceSpec struct {
+	Requests ResourceList `json:"requests,omitempty"`
+	Limits   ResourceList `json:"limits,omitempty"`
+}
+
+// ResourceList details resource units
+type ResourceList struct {
+	CPU    string `json:"cpu,omitempty"`
+	Memory string `json:"memory,omitempty"`
+}
+
+// PersistenceSpec details data persistence settings
+type PersistenceSpec struct {
+	Enabled      bool   `json:"enabled,omitempty"`
+	StorageClass string `json:"storageClass,omitempty"`
+	Size         string `json:"size,omitempty"`
+}
+
 // RedisStatus defines the observed state of Redis
 type RedisStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	Nodes   []string `json:"nodes,omitempty"`
+	Status  string   `json:"status,omitempty"`
+	Message string   `json:"message,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -55,7 +75,6 @@ type Redis struct {
 }
 
 // +kubebuilder:object:root=true
-
 // RedisList contains a list of Redis
 type RedisList struct {
 	metav1.TypeMeta `json:",inline"`
@@ -67,8 +86,35 @@ func init() {
 	SchemeBuilder.Register(&Redis{}, &RedisList{})
 }
 
+// Setting defaults. Prefer it here over the controller or webhook for simplicity.
 func (r *Redis) SetDefaults() {
 	if r.Spec.Image == "" {
 		r.Spec.Image = "bitnami/redis:8.0"
+	}
+
+	if r.Spec.Replicas == 0 {
+		r.Spec.Replicas = 1
+	}
+
+	if r.Spec.Resources.Requests.CPU == "" {
+		r.Spec.Resources.Requests.CPU = "100m"
+	}
+	if r.Spec.Resources.Requests.Memory == "" {
+		r.Spec.Resources.Requests.Memory = "128Mi"
+	}
+	if r.Spec.Resources.Limits.CPU == "" {
+		r.Spec.Resources.Limits.CPU = "250m"
+	}
+	if r.Spec.Resources.Limits.Memory == "" {
+		r.Spec.Resources.Limits.Memory = "256Mi"
+	}
+
+	if r.Spec.Persistence.Enabled {
+		if r.Spec.Persistence.Size == "" {
+			r.Spec.Persistence.Size = "1Gi"
+		}
+		if r.Spec.Persistence.StorageClass == "" {
+			r.Spec.Persistence.StorageClass = "standard"
+		}
 	}
 }
