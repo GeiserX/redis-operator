@@ -46,7 +46,6 @@ type RedisReconciler struct {
 // +kubebuilder:rbac:groups=cache.geiser.cloud,resources=redis,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cache.geiser.cloud,resources=redis/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=cache.geiser.cloud,resources=redis/finalizers,verbs=update
-
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 func (r *RedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -111,21 +110,31 @@ func (r *RedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	deployment := &appsv1.Deployment{}
 	err = r.Get(ctx, types.NamespacedName{Name: deploymentName, Namespace: redis.Namespace}, deployment)
 	if err != nil && errors.IsNotFound(err) {
-		// No Deployment exists, create one
+		// No Deployment found, create one
 		log.Info("Creating new Deployment", "Deployment.Namespace", redis.Namespace, "Deployment.Name", deploymentName)
 		deployment = r.deploymentForRedis(redis, deploymentName)
 		if err = r.Create(ctx, deployment); err != nil {
 			log.Error(err, "Failed to create Deployment", "Deployment.Namespace", deployment.Namespace, "Deployment.Name", deployment.Name)
 			return ctrl.Result{}, err
 		}
-		// After successful creation, reconcile soon again
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	} else if err != nil {
 		log.Error(err, "Failed to get Deployment")
 		return ctrl.Result{}, err
 	}
 
-	// TODO: Scale/update deployment if necessary (next steps after confirming creation works)
+	// Handle scaling updates clearly
+	desiredReplicas := redis.Spec.Replicas
+	if *deployment.Spec.Replicas != desiredReplicas {
+		log.Info("Updating deployment replicas", "Deployment.Name", deployment.Name, "from", *deployment.Spec.Replicas, "to", desiredReplicas)
+		deployment.Spec.Replicas = &desiredReplicas // Setting desired replicas
+		if err := r.Update(ctx, deployment); err != nil {
+			log.Error(err, "Failed to update Deployment replicas")
+			return ctrl.Result{}, err
+		}
+		log.Info("Updated Deployment replicas successfully", "Deployment.Name", deploymentName, "Replicas", desiredReplicas)
+		return ctrl.Result{RequeueAfter: time.Minute}, nil
+	}
 
 	return ctrl.Result{}, nil
 }

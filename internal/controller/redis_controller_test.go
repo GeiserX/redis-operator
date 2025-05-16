@@ -21,6 +21,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -51,7 +53,10 @@ var _ = Describe("Redis Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: cachev1alpha1.RedisSpec{
+						Replicas: 1,
+						Image:    "bitnami/redis:8.0",
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
@@ -79,6 +84,113 @@ var _ = Describe("Redis Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
 			// Example: If you expect a certain status condition after reconciliation, verify it here.
+		})
+	})
+})
+
+// Test random password generation
+var _ = Describe("generateRandomPassword", func() {
+	Context("With valid input length", func() {
+		It("should generate a password with specified length", func() {
+			length := 20
+			password, err := generateRandomPassword(length)
+
+			Expect(err).NotTo(HaveOccurred())    // no error occurred
+			Expect(password).To(HaveLen(length)) // password exactly 20 characters
+
+			// Generate a second password clearly to ensure randomness
+			password2, err2 := generateRandomPassword(length)
+
+			Expect(err2).NotTo(HaveOccurred())
+			Expect(password2).To(HaveLen(length))
+			Expect(password2).NotTo(Equal(password)) // explicitly verifying they are different
+		})
+	})
+})
+
+// Test if Deployment is generated with Redis CR
+var _ = Describe("deploymentForRedis", func() {
+	Context("When provided a Redis resource", func() {
+		It("should correctly generate a Deployment matching Redis CR", func() {
+			redis := &cachev1alpha1.Redis{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-redis",
+					Namespace: "default",
+				},
+				Spec: cachev1alpha1.RedisSpec{
+					Replicas: 3,
+					Image:    "bitnami/redis:7",
+				},
+			}
+
+			deployment := (&RedisReconciler{Scheme: k8sClient.Scheme()}).deploymentForRedis(redis, "test-redis-deployment")
+
+			Expect(deployment.Name).To(Equal("test-redis-deployment"))
+			Expect(*deployment.Spec.Replicas).To(Equal(int32(3)))
+			Expect(deployment.Spec.Template.Spec.Containers).To(HaveLen(1))
+
+			container := deployment.Spec.Template.Spec.Containers[0]
+			Expect(container.Image).To(Equal("bitnami/redis:7"))
+			Expect(container.Ports).To(ContainElement(corev1.ContainerPort{ContainerPort: 6379}))
+
+			Expect(container.Env).To(ContainElement(corev1.EnvVar{
+				Name: "REDIS_PASSWORD",
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: "test-redis-secret",
+						},
+						Key: "password",
+					},
+				},
+			}))
+		})
+	})
+})
+
+// Test if reconcile logic updates replica numbers correctly
+var _ = Describe("Redis Reconcile - Update Handling", func() {
+	Context("When updating Redis replicas", func() {
+		It("should update Deployment replicas accordingly", func() {
+			ctx := context.Background()
+
+			// Initial Redis CR
+			redis := &cachev1alpha1.Redis{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "update-redis",
+					Namespace: "default",
+				},
+				Spec: cachev1alpha1.RedisSpec{
+					Replicas: 2,
+					Image:    "bitnami/redis:8.0",
+				},
+			}
+			Expect(k8sClient.Create(ctx, redis)).Should(Succeed())
+
+			reconciler := &RedisReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			// First reconciliation (initial deployment created)
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: "update-redis", Namespace: "default"},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Simulate manual scaling change on Redis CR (replicas to 4)
+			redis.Spec.Replicas = 4
+			Expect(k8sClient.Update(ctx, redis)).Should(Succeed())
+
+			// Second reconciliation (should update deployment)
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: "update-redis", Namespace: "default"},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			deployment := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "update-redis-deployment", Namespace: "default"}, deployment)).Should(Succeed())
+			Expect(*deployment.Spec.Replicas).To(Equal(int32(4)))
 		})
 	})
 })
