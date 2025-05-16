@@ -154,6 +154,7 @@ func (r *RedisReconciler) deploymentForRedis(redis *cachev1alpha1.Redis, deploym
 		"app": redis.Name,
 	}
 	replicas := redis.Spec.Replicas
+	secretName := redis.Name + "-secret" // clearly match the exact secret name we created above
 
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -179,6 +180,19 @@ func (r *RedisReconciler) deploymentForRedis(redis *cachev1alpha1.Redis, deploym
 									ContainerPort: 6379,
 								},
 							},
+							Env: []corev1.EnvVar{
+								{
+									Name: "REDIS_PASSWORD",
+									ValueFrom: &corev1.EnvVarSource{
+										SecretKeyRef: &corev1.SecretKeySelector{
+											LocalObjectReference: corev1.LocalObjectReference{
+												Name: secretName, // Using the defined secret
+											},
+											Key: "password", // As we defined earlier
+										},
+									},
+								},
+							},
 						},
 					},
 				},
@@ -186,7 +200,6 @@ func (r *RedisReconciler) deploymentForRedis(redis *cachev1alpha1.Redis, deploym
 		},
 	}
 
-	// Associate deployment explicitly with Redis instance for automatic garbage collection
 	ctrl.SetControllerReference(redis, deployment, r.Scheme)
 
 	return deployment
