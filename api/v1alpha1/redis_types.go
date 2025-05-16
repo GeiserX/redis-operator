@@ -37,8 +37,8 @@ type RedisStatus struct {
 }
 
 // +kubebuilder:object:root=true
+// +kubebuilder:resource:shortName=red
 // +kubebuilder:subresource:status
-
 // Redis is the Schema for the redis API
 type Redis struct {
 	metav1.TypeMeta   `json:",inline"`

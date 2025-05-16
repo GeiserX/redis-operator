@@ -11,6 +11,8 @@ spec:
     kind: Redis
     listKind: RedisList
     plural: redis
+    shortNames:
+    - red
     singular: redis
   scope: Namespaced
   versions:
