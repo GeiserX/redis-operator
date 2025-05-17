@@ -11,3 +11,24 @@ Please note, it does NOT automatically provision Redis Clusters or utilize Redis
 For production deployments needing real Redis high availability and data replication, consider using:
 - [Bitnami Redis Helm Chart](https://github.com/bitnami/charts/tree/master/bitnami/redis)
 - Redis Cluster or Redis Sentinel deployment models explicitly.
+
+
+kubectl patch redis my-redis -n default \
+  --type merge --patch '{"spec":{"replicas":3}}'
+
+
+kubectl patch redis my-redis -n default --type merge --patch='
+{
+  "spec": {
+    "resources": {
+      "requests": {
+        "cpu": "200m",
+        "memory": "256Mi"
+      },
+      "limits": {
+        "cpu": "500m",
+        "memory": "512Mi"
+      }
+    }
+  }
+}'

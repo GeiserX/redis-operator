@@ -18,6 +18,9 @@ package controller
 
 import (
 	"context"
+	"crypto/rand"
+	"fmt"
+	"math/big"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -28,15 +31,15 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
-	"crypto/rand"
-	"encoding/base64"
-
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	cachev1alpha1 "github.com/GeiserX/redis-operator/api/v1alpha1"
 )
+
+const passwordCharset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+"
+const charsetLength = len(passwordCharset)
 
 // RedisReconciler reconciles a Redis object
 type RedisReconciler struct {
@@ -47,6 +50,7 @@ type RedisReconciler struct {
 // +kubebuilder:rbac:groups=cache.geiser.cloud,resources=redis,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cache.geiser.cloud,resources=redis/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=cache.geiser.cloud,resources=redis/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 func (r *RedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -62,6 +66,17 @@ func (r *RedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		log.Error(err, "Failed to get Redis")
 		return ctrl.Result{}, err
 	}
+	redis.SetDefaults()
+
+	// Preparations for custom Status
+	patch := client.MergeFrom(redis.DeepCopy()) // explicitly capture initial state to patch later
+	redis.Status.Status = "Reconciling"
+	redis.Status.Message = "Reconciling Redis in progress"
+	redis.Status.Nodes = nil
+	if err := r.Status().Patch(ctx, redis, patch); err != nil {
+		log.Error(err, "Failed to explicitly update Redis status to Reconciling")
+		return ctrl.Result{}, err
+	}
 
 	// Secret password
 	secretName := redis.Name + "-secret"
@@ -72,7 +87,13 @@ func (r *RedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		password, err := generateRandomPassword(20)
 		if err != nil {
 			log.Error(err, "Failed to generate random password")
-			return ctrl.Result{}, err
+
+			patch = client.MergeFrom(redis.DeepCopy())
+			redis.Status.Status = "Error"
+			redis.Status.Message = fmt.Sprintf("Password generation failed: %v", err)
+			_ = r.Status().Patch(ctx, redis, patch)
+
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil // explicitly delayed retry
 		}
 
 		secret = &corev1.Secret{
@@ -88,12 +109,24 @@ func (r *RedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		// set Redis CR as the owner
 		if err := ctrl.SetControllerReference(redis, secret, r.Scheme); err != nil {
 			log.Error(err, "Failed to set owner reference for secret")
-			return ctrl.Result{}, err
+
+			patch = client.MergeFrom(redis.DeepCopy())
+			redis.Status.Status = "Error"
+			redis.Status.Message = fmt.Sprintf("Owner reference for secret failed: %v", err)
+			_ = r.Status().Patch(ctx, redis, patch)
+
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil // explicitly delayed retry
 		}
 
 		if err := r.Create(ctx, secret); err != nil {
-			log.Error(err, "Failed to create Redis Secret", "Secret.Name", secretName)
-			return ctrl.Result{}, err
+			log.Error(err, "Failed explicitly creating Redis Secret", "Secret.Name", secretName)
+
+			patch = client.MergeFrom(redis.DeepCopy())
+			redis.Status.Status = "Error"
+			redis.Status.Message = fmt.Sprintf("Secret creation failed: %v", err)
+			_ = r.Status().Patch(ctx, redis, patch)
+
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil // Delayed retry
 		}
 
 		log.Info("Created new Redis Secret", "Secret.Name", secretName)
@@ -115,13 +148,28 @@ func (r *RedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		log.Info("Creating new Deployment", "Deployment.Namespace", redis.Namespace, "Deployment.Name", deploymentName)
 		deployment = r.deploymentForRedis(redis, deploymentName)
 		if err = r.Create(ctx, deployment); err != nil {
-			log.Error(err, "Failed to create Deployment", "Deployment.Namespace", deployment.Namespace, "Deployment.Name", deployment.Name)
+			log.Error(err, "Failed to create Deployment explicitly", "Deployment.Namespace", deployment.Namespace, "Deployment.Name", deployment.Name)
+			patch = client.MergeFrom(redis.DeepCopy())
+			redis.Status.Status = "Error"
+			redis.Status.Message = fmt.Sprintf("Deployment creation failed: %v", err)
+			_ = r.Status().Patch(ctx, redis, patch)
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil // explicitly delayed retry
+		}
+		patch = client.MergeFrom(redis.DeepCopy())
+		redis.Status.Status = "Ready"
+		redis.Status.Message = "Deployment created successfully"
+		if err := r.Status().Patch(ctx, redis, patch); err != nil {
+			log.Error(err, "Failed updating Redis status after creating Deployment")
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil // explicitly delayed retry
 	} else if err != nil {
 		log.Error(err, "Failed to get Deployment")
-		return ctrl.Result{}, err
+		patch = client.MergeFrom(redis.DeepCopy())
+		redis.Status.Status = "Error"
+		redis.Status.Message = fmt.Sprintf("Failed to get deployment state: %v", err)
+		_ = r.Status().Patch(ctx, redis, patch)
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
 	// Handle scaling updates clearly
@@ -130,11 +178,22 @@ func (r *RedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		log.Info("Updating deployment replicas", "Deployment.Name", deployment.Name, "from", *deployment.Spec.Replicas, "to", desiredReplicas)
 		deployment.Spec.Replicas = &desiredReplicas // Setting desired replicas
 		if err := r.Update(ctx, deployment); err != nil {
-			log.Error(err, "Failed to update Deployment replicas")
-			return ctrl.Result{}, err
+			log.Error(err, "Failed explicitly updating Deployment replicas")
+			patch = client.MergeFrom(redis.DeepCopy())
+			redis.Status.Status = "Error"
+			redis.Status.Message = fmt.Sprintf("Scaling update failed: %v", err)
+			_ = r.Status().Patch(ctx, redis, patch)
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil // explicitly retry after delay
 		}
 		log.Info("Updated Deployment replicas successfully", "Deployment.Name", deploymentName, "Replicas", desiredReplicas)
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+		patch = client.MergeFrom(redis.DeepCopy())
+		redis.Status.Status = "Ready"
+		redis.Status.Message = fmt.Sprintf("Deployment updated to %d replicas", redis.Spec.Replicas)
+		if err := r.Status().Patch(ctx, redis, patch); err != nil {
+			log.Error(err, "Failed updating Redis status after scaling deployment")
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
 	// Check and reconcile resources requirements
@@ -143,18 +202,34 @@ func (r *RedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		updatedDeployment := r.deploymentForRedis(redis, deploymentName)
 		deployment.Spec.Template.Spec = updatedDeployment.Spec.Template.Spec
 		if err := r.Update(ctx, deployment); err != nil {
-			log.Error(err, "Failed updating deployment resources")
-			return ctrl.Result{}, err
+			log.Error(err, "Failed explicitly updating deployment resources")
+			patch = client.MergeFrom(redis.DeepCopy())
+			redis.Status.Status = "Error"
+			redis.Status.Message = fmt.Sprintf("Resource requirements update failed: %v", err)
+			_ = r.Status().Patch(ctx, redis, patch)
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
 		log.Info("Deployment updated successfully with new resources. Pods restarting..")
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+		// after r.Update(ctx, deployment) once resource is updated successfully
+		patch = client.MergeFrom(redis.DeepCopy())
+		redis.Status.Status = "Ready"
+		redis.Status.Message = "Deployment resources updated successfully"
+		if err := r.Status().Patch(ctx, redis, patch); err != nil {
+			log.Error(err, "Failed updating Redis status after resource update")
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
 	// Check and reconcile persistence PVC
 	if redis.Spec.Persistence.Enabled {
 		if err := r.reconcilePersistence(ctx, redis); err != nil {
 			log.Error(err, "Failed reconciling persistence")
-			return ctrl.Result{}, err
+			patch = client.MergeFrom(redis.DeepCopy())
+			redis.Status.Status = "Error"
+			redis.Status.Message = fmt.Sprintf("Persistent storage reconciliation failed: %v", err)
+			_ = r.Status().Patch(ctx, redis, patch)
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil // explicitly delay retry
 		}
 	}
 
@@ -170,13 +245,15 @@ func (r *RedisReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 // generateRandomPassword creates a secure random string of specified length
 func generateRandomPassword(length int) (string, error) {
-	randomBytes := make([]byte, length)
-	_, err := rand.Read(randomBytes)
-	if err != nil {
-		return "", err
+	password := make([]byte, length)
+	for i := range password {
+		num, err := rand.Int(rand.Reader, big.NewInt(int64(charsetLength)))
+		if err != nil {
+			return "", err
+		}
+		password[i] = passwordCharset[num.Int64()]
 	}
-	// Base64 encode the random bytes to ensure password is printable
-	return base64.StdEncoding.EncodeToString(randomBytes)[:length], nil
+	return string(password), nil
 }
 
 // deploymentForRedis returns a Redis Deployment object
