@@ -40,6 +40,7 @@ import (
 
 const passwordCharset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+"
 const charsetLength = len(passwordCharset)
+const redisFinalizer = "cache.geiser.cloud/finalizer"
 
 // RedisReconciler reconciles a Redis object
 type RedisReconciler struct {
@@ -226,18 +227,6 @@ func (r *RedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	// Check and reconcile persistence PVC
-	if redis.Spec.Persistence.Enabled {
-		if err := r.reconcilePersistence(ctx, redis); err != nil {
-			log.Error(err, "Failed reconciling persistence")
-			patch = client.MergeFrom(redis.DeepCopy())
-			redis.Status.Status = "Error"
-			redis.Status.Message = fmt.Sprintf("Persistent storage reconciliation failed: %v", err)
-			_ = r.Status().Patch(ctx, redis, patch)
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil // explicitly delay retry
-		}
-	}
-
 	return ctrl.Result{}, nil
 }
 
@@ -299,25 +288,6 @@ func (r *RedisReconciler) deploymentForRedis(redis *cachev1alpha1.Redis, deploym
 		},
 	}
 
-	// Handle persistence
-	podVolumes := []corev1.Volume{}
-	if redis.Spec.Persistence.Enabled {
-		podVolumes = append(podVolumes, corev1.Volume{
-			Name: "redis-data",
-			VolumeSource: corev1.VolumeSource{
-				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: redis.Name + "-pvc",
-				},
-			},
-		})
-		container.VolumeMounts = []corev1.VolumeMount{
-			{
-				Name:      "redis-data",
-				MountPath: "/data",
-			},
-		}
-	}
-
 	// Deployment creation
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -334,7 +304,6 @@ func (r *RedisReconciler) deploymentForRedis(redis *cachev1alpha1.Redis, deploym
 					Labels: labels,
 				},
 				Spec: corev1.PodSpec{
-					Volumes:    podVolumes,
 					Containers: []corev1.Container{container},
 				},
 			},
@@ -356,42 +325,4 @@ func needsResourceUpdate(existing appsv1.Deployment, redis cachev1alpha1.Redis) 
 		container.Resources.Requests["memory"] != reqMem ||
 		container.Resources.Limits["cpu"] != limCpu ||
 		container.Resources.Limits["memory"] != limMem
-}
-
-func (r *RedisReconciler) reconcilePersistence(ctx context.Context, redis *cachev1alpha1.Redis) error {
-	if !redis.Spec.Persistence.Enabled {
-		return nil
-	}
-
-	pvcName := redis.Name + "-pvc"
-	pvc := &corev1.PersistentVolumeClaim{}
-	err := r.Get(ctx, types.NamespacedName{Name: pvcName, Namespace: redis.Namespace}, pvc)
-	if err != nil && errors.IsNotFound(err) {
-		// No existing PVC, create it
-		storageQuantity, err := resource.ParseQuantity(redis.Spec.Persistence.Size)
-		if err != nil {
-			return err
-		}
-		pvc = &corev1.PersistentVolumeClaim{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      pvcName,
-				Namespace: redis.Namespace,
-			},
-			Spec: corev1.PersistentVolumeClaimSpec{
-				AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-				StorageClassName: &redis.Spec.Persistence.StorageClass,
-				Resources: corev1.VolumeResourceRequirements{
-					Requests: corev1.ResourceList{
-						corev1.ResourceStorage: storageQuantity,
-					},
-				},
-			},
-		}
-		ctrl.SetControllerReference(redis, pvc, r.Scheme)
-		return r.Create(ctx, pvc)
-	} else if err != nil {
-		return err
-	}
-	// Note: resizing PVC downward is unsafe—here, conservatively do nothing if requested size smaller.
-	return nil
 }
