@@ -1,3 +1,4 @@
+# Manager
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -44,7 +45,7 @@ spec:
                     values: ["linux"]
                   - key: kubernetes.io/arch
                     operator: In
-                    values: ["amd64"]
+                    values: ["amd64", "arm64"]
       containers:
         - name: manager
           image: drumsergio/redis-operator:0.0.1

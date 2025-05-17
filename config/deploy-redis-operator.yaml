@@ -108,32 +108,66 @@ kind: ClusterRole
 metadata:
   name: manager-role
 rules:
-- apiGroups:
-  - cache.geiser.cloud
-  resources:
-  - redis
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - cache.geiser.cloud
-  resources:
-  - redis/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - cache.geiser.cloud
-  resources:
-  - redis/status
-  verbs:
-  - get
-  - patch
-  - update
+  - apiGroups:
+      - cache.geiser.cloud
+    resources:
+      - redis
+      - redis/finalizers
+      - redis/status
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups: [""]
+    resources:
+      - secrets
+      - persistentvolumeclaims
+      - pods
+      - services
+      - events
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups: [""]
+    resources:
+      - persistentvolumeclaims
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
 ---
 ### RBAC RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
@@ -150,7 +184,7 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: controller-manager
-  namespace: system
+  namespace: redis-operator-system
 ---
 # Manager
 apiVersion: v1
@@ -161,6 +195,12 @@ metadata:
     app.kubernetes.io/name: redis-operator
     app.kubernetes.io/managed-by: kustomize
   name: redis-operator-system  # changed from default
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: controller-manager
+  namespace: redis-operator-system
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -199,7 +239,7 @@ spec:
                     values: ["linux"]
                   - key: kubernetes.io/arch
                     operator: In
-                    values: ["amd64"]
+                    values: ["amd64", "arm64"]
       containers:
         - name: manager
           image: drumsergio/redis-operator:0.0.1

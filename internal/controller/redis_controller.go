@@ -66,7 +66,12 @@ func (r *RedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		log.Error(err, "Failed to get Redis")
 		return ctrl.Result{}, err
 	}
+	original := redis.DeepCopy()
 	redis.SetDefaults()
+	if err := r.Patch(ctx, redis, client.MergeFrom(original)); err != nil {
+		log.Error(err, "Failed to explicitly persist default values back to Redis CR")
+		return ctrl.Result{}, err
+	}
 
 	// Preparations for custom Status
 	patch := client.MergeFrom(redis.DeepCopy()) // explicitly capture initial state to patch later
