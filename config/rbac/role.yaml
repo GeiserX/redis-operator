@@ -1,32 +1,65 @@
----
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: manager-role
 rules:
-- apiGroups:
-  - cache.geiser.cloud
-  resources:
-  - redis
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - cache.geiser.cloud
-  resources:
-  - redis/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - cache.geiser.cloud
-  resources:
-  - redis/status
-  verbs:
-  - get
-  - patch
-  - update
+  - apiGroups:
+      - cache.geiser.cloud
+    resources:
+      - redis
+      - redis/finalizers
+      - redis/status
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups: [""]
+    resources:
+      - secrets
+      - persistentvolumeclaims
+      - pods
+      - services
+      - events
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups: [""]
+    resources:
+      - persistentvolumeclaims
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
