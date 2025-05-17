@@ -44,17 +44,6 @@ spec:
               image:
                 description: Docker image to deploy, defaults to bitnami/redis:8.0
                 type: string
-              persistence:
-                description: Storage enables persistence - If Point-in-time snapshots
-                  are there
-                properties:
-                  enabled:
-                    type: boolean
-                  size:
-                    type: string
-                  storageClass:
-                    type: string
-                type: object
               replicas:
                 description: Number of Redis instances to deploy
                 format: int32

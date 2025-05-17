@@ -130,11 +130,6 @@ var _ = Describe("deploymentForRedis", func() {
 							Memory: "256Mi",
 						},
 					},
-					Persistence: cachev1alpha1.PersistenceSpec{
-						Enabled:      true,
-						StorageClass: "standard",
-						Size:         "1Gi",
-					},
 				},
 			}
 
@@ -169,7 +164,6 @@ var _ = Describe("Redis Reconcile - Update Handling", func() {
 		It("should update Deployment replicas accordingly", func() {
 			ctx := context.Background()
 
-			// Initial Redis CR
 			redis := &cachev1alpha1.Redis{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "update-redis",
@@ -188,11 +182,6 @@ var _ = Describe("Redis Reconcile - Update Handling", func() {
 							Memory: "256Mi",
 						},
 					},
-					Persistence: cachev1alpha1.PersistenceSpec{
-						Enabled:      true,
-						StorageClass: "standard",
-						Size:         "1Gi",
-					},
 				},
 			}
 			Expect(k8sClient.Create(ctx, redis)).Should(Succeed())
@@ -202,25 +191,140 @@ var _ = Describe("Redis Reconcile - Update Handling", func() {
 				Scheme: k8sClient.Scheme(),
 			}
 
-			// First reconciliation (initial deployment created)
+			// First reconciliation (initial secret & deployment created)
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: types.NamespacedName{Name: "update-redis", Namespace: "default"},
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			// Simulate manual scaling change on Redis CR (replicas to 4)
-			redis.Spec.Replicas = 4
-			Expect(k8sClient.Update(ctx, redis)).Should(Succeed())
-
-			// Second reconciliation (should update deployment)
+			// Second reconciliation (assuming immediate requeue after secret created)
 			_, err = reconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: types.NamespacedName{Name: "update-redis", Namespace: "default"},
 			})
 			Expect(err).NotTo(HaveOccurred())
 
+			// Important: Refresh object's state after reconciliation
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "update-redis", Namespace: "default"}, redis)).Should(Succeed())
+
+			// Manual scaling change
+			redis.Spec.Replicas = 4
+			Expect(k8sClient.Update(ctx, redis)).Should(Succeed())
+
+			// Again: reconcile after manual scaling
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: "update-redis", Namespace: "default"},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify updated replica count on Deployment
 			deployment := &appsv1.Deployment{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "update-redis-deployment", Namespace: "default"}, deployment)).Should(Succeed())
 			Expect(*deployment.Spec.Replicas).To(Equal(int32(4)))
+		})
+	})
+})
+
+// Test Secret Reuse on Reconciliation (Password Persistence)
+var _ = Describe("Redis Controller", func() {
+	Context("When reconciling existing Redis with Secret", func() {
+		It("should reuse existing Secret without changing the password", func() {
+			ctx := context.Background()
+			redis := &cachev1alpha1.Redis{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "password-persistence-redis",
+					Namespace: "default",
+				},
+				Spec: cachev1alpha1.RedisSpec{
+					Replicas: 1,
+					Image:    "bitnami/redis:8.0",
+				},
+			}
+			Expect(k8sClient.Create(ctx, redis)).Should(Succeed())
+
+			reconciler := &RedisReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			// First reconciliation to create Secret
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: redis.Name, Namespace: redis.Namespace},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Get the password from the Secret
+			secret := &corev1.Secret{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: redis.Name + "-secret", Namespace: redis.Namespace}, secret)).Should(Succeed())
+			initialPassword := secret.Data["password"]
+
+			// Reconcile again
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: redis.Name, Namespace: redis.Namespace},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Get the password again
+			updatedSecret := &corev1.Secret{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: redis.Name + "-secret", Namespace: redis.Namespace}, updatedSecret)).Should(Succeed())
+			updatedPassword := updatedSecret.Data["password"]
+
+			// Verify the password hasn't changed
+			Expect(updatedPassword).To(Equal(initialPassword))
+		})
+	})
+})
+
+// Test Reconciliation When Secret Already Exists (Idempotency)
+var _ = Describe("Redis Controller", func() {
+	Context("When Secret already exists before Redis CR is reconciled", func() {
+		It("should use the existing Secret", func() {
+			ctx := context.Background()
+			secretName := "existing-secret-redis-secret"
+			preExistingSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "existing-secret-redis-secret",
+					Namespace: "default",
+				},
+				StringData: map[string]string{
+					"password": "predefinedPassword123!",
+				},
+			}
+			Expect(k8sClient.Create(ctx, preExistingSecret)).Should(Succeed())
+
+			redis := &cachev1alpha1.Redis{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "existing-secret-redis",
+					Namespace: "default",
+				},
+				Spec: cachev1alpha1.RedisSpec{
+					Replicas: 1,
+					Image:    "bitnami/redis:8.0",
+				},
+			}
+			Expect(k8sClient.Create(ctx, redis)).Should(Succeed())
+
+			reconciler := &RedisReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: redis.Name, Namespace: redis.Namespace},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Ensure that the existing Secret is used
+			deployment := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: redis.Name + "-deployment", Namespace: redis.Namespace}, deployment)).Should(Succeed())
+			envVars := deployment.Spec.Template.Spec.Containers[0].Env
+			var redisPasswordEnv corev1.EnvVar
+			for _, env := range envVars {
+				if env.Name == "REDIS_PASSWORD" {
+					redisPasswordEnv = env
+					break
+				}
+			}
+			Expect(redisPasswordEnv.ValueFrom.SecretKeyRef.Name).To(Equal(secretName))
 		})
 	})
 })

@@ -30,10 +30,6 @@ spec:
     limits:
       cpu: "500m"
       memory: "512Mi"
-  persistence:
-    enabled: true
-    storageClass: "standard"
-    size: "1Gi"
 ```
 
 And then apply:
@@ -62,21 +58,6 @@ Or reapply the modified CR.
 ### Managing Resource Requests and Limits
 The Redis operator lets you explicitly define CPU and Memory limits and requests
 
-### Persistent Storage Configuration 
-You can easily configure persistent storage explicitly.
-```bash
-kubectl patch redis my-redis -n default --type merge --patch='{
-  "spec": {
-    "persistence": {
-      "enabled": true,
-      "storageClass": "standard",
-      "size": "5Gi"
-    }
-  }
-}'
-```
-IMPORTANT NOTE: Decreasing volume sizes is unsupported explicitly due to Kubernetes PVC design limits.
-
 ### Automatic cleanup
 All Kubernetes resources (Deployments, Secrets, PVC) explicitly auto-cleaned by Kubernetes via ownership references.
 
@@ -88,7 +69,26 @@ This Redis Operator is explicitly developed as a Proof-Of-Concept (PoC) demonstr
 
 - Explicitly DOES NOT provision Redis Clusters or implement highly available Redis (no Redis Sentinel or Redis Cluster).
 
-- Lack of Data Replication: Redis pods explicitly run standalone—NO Sentinel, No automatic redis data replication or HA. Explicitly recommend for lightweight tests, demos only—not production workloads.
+- Lack of Data Replication: Redis pods run standalone—NO Sentinel, No automatic redis data replication or HA. Explicitly recommend for lightweight tests, demos only—not production workloads.
+
+## Tests
+
+The Redis-Operator project includes several automated unit and integration tests to ensure correctness, robustness, and reliable behavior of the operator.
+
+### Before You Start
+
+Make sure exactly you installed the Operator Framework test environment (envtest) dependencies.
+
+```bash
+make envtest
+export KUBEBUILDER_ASSETS="$(pwd)/bin/k8s/$(go env GOOS)/$(go env GOARCH)"
+```
+
+### Unit + Integration Tests
+
+```bash
+make test
+```
 
 ## Maintainers
 

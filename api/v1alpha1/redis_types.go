@@ -31,9 +31,6 @@ type RedisSpec struct {
 	// Resources defines resource requests and limits
 	// +optional
 	Resources ResourceSpec `json:"resources,omitempty"`
-	// Storage enables persistence - If Point-in-time snapshots are there
-	// +optional
-	Persistence PersistenceSpec `json:"persistence,omitempty"`
 }
 
 // ResourceSpec defines CPU and memory requests/limits
@@ -46,13 +43,6 @@ type ResourceSpec struct {
 type ResourceList struct {
 	CPU    string `json:"cpu,omitempty"`
 	Memory string `json:"memory,omitempty"`
-}
-
-// PersistenceSpec details data persistence settings
-type PersistenceSpec struct {
-	Enabled      bool   `json:"enabled,omitempty"`
-	StorageClass string `json:"storageClass,omitempty"`
-	Size         string `json:"size,omitempty"`
 }
 
 // RedisStatus defines the observed state of Redis
@@ -107,14 +97,5 @@ func (r *Redis) SetDefaults() {
 	}
 	if r.Spec.Resources.Limits.Memory == "" {
 		r.Spec.Resources.Limits.Memory = "256Mi"
-	}
-
-	if r.Spec.Persistence.Enabled {
-		if r.Spec.Persistence.Size == "" {
-			r.Spec.Persistence.Size = "1Gi"
-		}
-		if r.Spec.Persistence.StorageClass == "" {
-			r.Spec.Persistence.StorageClass = "standard"
-		}
 	}
 }
