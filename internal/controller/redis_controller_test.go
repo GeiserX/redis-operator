@@ -18,19 +18,31 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/scale/scheme"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	cachev1alpha1 "github.com/GeiserX/redis-operator/api/v1alpha1"
 )
+
+func testScheme() *runtime.Scheme {
+	s := runtime.NewScheme()
+	_ = scheme.AddToScheme(s)
+	_ = cachev1alpha1.AddToScheme(s)
+	return s
+}
 
 var _ = Describe("Redis Controller", func() {
 	Context("When reconciling a resource", func() {
@@ -75,7 +87,7 @@ var _ = Describe("Redis Controller", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &RedisReconciler{
 				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Scheme: testScheme(),
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -91,18 +103,15 @@ var _ = Describe("Redis Controller", func() {
 // Test random password generation
 var _ = Describe("generateRandomPassword", func() {
 	Context("With valid input length", func() {
-		It("should generate a password with specified length", func() {
-			length := 20
-			password, err := generateRandomPassword(length)
+		It("should generate a password", func() {
+			password, err := generateRandomPassword()
 
-			Expect(err).NotTo(HaveOccurred())    // no error occurred
-			Expect(password).To(HaveLen(length)) // password exactly 20 characters
+			Expect(err).NotTo(HaveOccurred()) // no error occurred
 
 			// Generate a second password clearly to ensure randomness
-			password2, err2 := generateRandomPassword(length)
+			password2, err2 := generateRandomPassword()
 
 			Expect(err2).NotTo(HaveOccurred())
-			Expect(password2).To(HaveLen(length))
 			Expect(password2).NotTo(Equal(password)) // explicitly verifying they are different
 		})
 	})
@@ -133,7 +142,10 @@ var _ = Describe("deploymentForRedis", func() {
 				},
 			}
 
-			deployment := (&RedisReconciler{Scheme: k8sClient.Scheme()}).deploymentForRedis(redis, "test-redis-deployment")
+			deployment := (&RedisReconciler{
+				Client: k8sClient,
+				Scheme: testScheme(),
+			}).deploymentForRedis(context.TODO(), redis, "test-redis-deployment")
 
 			Expect(deployment.Name).To(Equal("test-redis-deployment"))
 			Expect(*deployment.Spec.Replicas).To(Equal(int32(3)))
@@ -188,7 +200,7 @@ var _ = Describe("Redis Reconcile - Update Handling", func() {
 
 			reconciler := &RedisReconciler{
 				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Scheme: testScheme(),
 			}
 
 			// First reconciliation (initial secret & deployment created)
@@ -224,6 +236,51 @@ var _ = Describe("Redis Reconcile - Update Handling", func() {
 	})
 })
 
+var _ = Describe("Secret creation on first reconcile", func() {
+	It("creates <name>-secret exactly once and sets owner-ref", func() {
+		ctx := context.Background()
+		const (
+			name      = "secret-check"
+			namespace = "default"
+		)
+
+		cr := &cachev1alpha1.Redis{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+			Spec:       cachev1alpha1.RedisSpec{Replicas: 1},
+		}
+		Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+
+		r := &RedisReconciler{
+			Client: k8sClient,
+			Scheme: testScheme(),
+		}
+
+		// first pass: CR defaults persisted
+		_, err := r.Reconcile(ctx, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: name, Namespace: namespace},
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		// second pass: Secret gets created
+		_, err = r.Reconcile(ctx, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: name, Namespace: namespace},
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		// assert Secret exists and has owner-ref
+		secret := &corev1.Secret{}
+		Expect(k8sClient.Get(ctx,
+			types.NamespacedName{Name: name + "-secret", Namespace: namespace}, secret)).
+			To(Succeed())
+
+		Expect(secret.OwnerReferences).ToNot(BeEmpty(),
+			"Secret should have an OwnerReference")
+		Expect(secret.OwnerReferences[0].Name).To(Equal(name))
+		Expect(secret.Type).To(Equal(corev1.SecretTypeOpaque))
+		Expect(secret.Data).To(HaveKey("password"))
+	})
+})
+
 // Test Secret Reuse on Reconciliation (Password Persistence)
 var _ = Describe("Redis Controller", func() {
 	Context("When reconciling existing Redis with Secret", func() {
@@ -243,7 +300,7 @@ var _ = Describe("Redis Controller", func() {
 
 			reconciler := &RedisReconciler{
 				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Scheme: testScheme(),
 			}
 
 			// First reconciliation to create Secret
@@ -305,7 +362,7 @@ var _ = Describe("Redis Controller", func() {
 
 			reconciler := &RedisReconciler{
 				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Scheme: testScheme(),
 			}
 
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{
@@ -325,6 +382,111 @@ var _ = Describe("Redis Controller", func() {
 				}
 			}
 			Expect(redisPasswordEnv.ValueFrom.SecretKeyRef.Name).To(Equal(secretName))
+		})
+	})
+})
+
+// Test watch mechanism and automatic pod recovery on unhealthy Pods
+var _ = Describe("Redis Controller – Pod Health and Recovery", func() {
+	Context("When a managed Redis Pod becomes unhealthy", func() {
+		It("should automatically delete unhealthy pods and emit recovery events", func() {
+			ctx := context.Background()
+			redisName := "health-monitor-redis"
+			namespace := "default"
+
+			// Step 1: Create Redis CR
+			redisInstance := &cachev1alpha1.Redis{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      redisName,
+					Namespace: namespace,
+				},
+				Spec: cachev1alpha1.RedisSpec{
+					Replicas: 1,
+					Image:    "bitnami/redis:8.0",
+				},
+			}
+			Expect(k8sClient.Create(ctx, redisInstance)).Should(Succeed())
+
+			reconciler := &RedisReconciler{
+				Client:        k8sClient,
+				Scheme:        testScheme(),
+				EventRecorder: record.NewFakeRecorder(10),
+			}
+
+			// Reconcile twice: once for secret, once for deployment/pods
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: redisName, Namespace: namespace},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: redisName, Namespace: namespace},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Step 2: Simulate unhealthy Pod
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("%s-pod", redisName),
+					Namespace: namespace,
+					Labels:    map[string]string{"app": redisName},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "redis",
+							Image: "bitnami/redis:8.0", // match redisInstance spec
+						},
+					},
+				},
+				Status: corev1.PodStatus{
+					ContainerStatuses: []corev1.ContainerStatus{
+						{
+							Name:         "redis",
+							Ready:        false,
+							RestartCount: 0,
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, pod)).Should(Succeed())
+
+			// Step 2b: mark the pod unhealthy through the /status sub-resource
+			Expect(k8sClient.Get(ctx,
+				types.NamespacedName{Name: pod.Name, Namespace: namespace}, pod)).Should(Succeed())
+
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+				Name:         "redis",
+				Ready:        false, // not ready  → unhealthy
+				RestartCount: 0,
+			}}
+			Expect(k8sClient.Status().Update(ctx, pod)).Should(Succeed())
+
+			// Step 3: Trigger reconciliation and verify automatic pod deletion
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: redisName, Namespace: namespace},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify Pod was deleted for automated recovery explicitly
+			Eventually(func() bool {
+				dummy := &corev1.Pod{}
+				err := k8sClient.Get(ctx,
+					types.NamespacedName{Name: pod.Name, Namespace: namespace},
+					dummy,
+				)
+				return errors.IsNotFound(err)
+			}, 5*time.Second, 200*time.Millisecond).Should(BeTrue(),
+				"Expected unhealthy Pod to be deleted by reconciler")
+
+			// Step 4: Check for emitted Kubernetes recovery event
+			eventRecorder, ok := reconciler.EventRecorder.(*record.FakeRecorder)
+			Expect(ok).To(BeTrue(), "Recorder must be FakeRecorder in tests")
+			select {
+			case event := <-eventRecorder.Events:
+				Expect(event).To(ContainSubstring("Deleted unhealthy Pod"), "Expect recovery event explicitly emitted")
+			case <-time.After(2 * time.Second):
+				Fail("Expected recovery event emission, but timed out")
+			}
 		})
 	})
 })
