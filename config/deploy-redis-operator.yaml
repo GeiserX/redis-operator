@@ -37,29 +37,26 @@ spec:
           jsonPath: .metadata.creationTimestamp
           type: date
       schema:
+schema:
         openAPIV3Schema:
           type: object
           description: Redis is the Schema for the Redis API
           properties:
             apiVersion:
               type: string
-              description: Standard Kubernetes field.
             kind:
               type: string
-              description: Standard Kubernetes field.
             metadata:
               type: object
             spec:
               type: object
-              required:
-                - replicas
+              required: ["replicas"]
               properties:
                 replicas:
                   type: integer
                   format: int32
                   minimum: 1
                   maximum: 100
-                  description: Number of Redis Pods to run
                 image:
                   type: string
                   description: Docker image (defaults to bitnami/redis:8.0)
@@ -86,9 +83,9 @@ spec:
                   description: Liveness / readiness probe configuration
                   properties:
                     liveness:
-                      $ref: "#/components/schemas/ProbeCfg"
+                      $ref: "#/definitions/ProbeCfg"
                     readiness:
-                      $ref: "#/components/schemas/ProbeCfg"
+                      $ref: "#/definitions/ProbeCfg"
             status:
               type: object
               description: Observed state of Redis
@@ -105,18 +102,13 @@ spec:
                   type: array
                   items:
                     type: object
-                    required:
-                      - type
-                      - status
-                      - reason
-                      - message
-                      - lastTransitionTime
+                    required: ["type","status","reason","message","lastTransitionTime"]
                     properties:
                       type:
                         type: string
                       status:
                         type: string
-                        enum: ["True", "False", "Unknown"]
+                        enum: ["True","False","Unknown"]
                       reason:
                         type: string
                       message:
@@ -128,27 +120,26 @@ spec:
                       lastTransitionTime:
                         type: string
                         format: date-time
-          components:
-            schemas:
-              ProbeCfg:
-                type: object
-                properties:
-                  command:
-                    type: array
-                    items:
-                      type: string
-                  initialDelaySeconds:
-                    type: integer
-                    format: int32
-                  periodSeconds:
-                    type: integer
-                    format: int32
-                  timeoutSeconds:
-                    type: integer
-                    format: int32
-                  failureThreshold:
-                    type: integer
-                    format: int32
+          definitions:
+            ProbeCfg:
+              type: object
+              properties:
+                command:
+                  type: array
+                  items:
+                    type: string
+                initialDelaySeconds:
+                  type: integer
+                  format: int32
+                periodSeconds:
+                  type: integer
+                  format: int32
+                timeoutSeconds:
+                  type: integer
+                  format: int32
+                failureThreshold:
+                  type: integer
+                  format: int32
 ---
 # ────────────────────────────────────────────────────────────────────────────
 # RBAC  (ClusterRole)
