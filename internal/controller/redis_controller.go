@@ -20,9 +20,9 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"path/filepath"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -101,7 +101,7 @@ func (r *RedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: redis.Namespace}, secret)
 	if err != nil && errors.IsNotFound(err) {
 		// Secret does not exist. Let's create it.
-		rawBytes, err := generateRandomPassword()
+		encoded, err := generateRandomPassword()
 		if err != nil {
 			log.Error(err, "Failed to generate random password")
 			setCondition(redis, CondPasswordGenerated,
@@ -127,7 +127,7 @@ func (r *RedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			Type:      corev1.SecretTypeOpaque,
 			Immutable: immutable,
 			Data: map[string][]byte{
-				"password": rawBytes,
+				"password": []byte(encoded),
 			},
 		}
 
@@ -298,40 +298,22 @@ func (r *RedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	}
 
-	unhealthyPods := []corev1.Pod{}
+	// Emit a Warning event if any container in any pod restarted ≥ 3 times.
+	// We do not delete the pod – Kubernetes will handle restarts itself.
 	for _, pod := range podList.Items {
 		for _, cs := range pod.Status.ContainerStatuses {
-			if !cs.Ready {
-				unhealthyPods = append(unhealthyPods, pod)
-				break
+			if cs.RestartCount >= 3 {
+				r.emitRedisEvent(
+					ctx,
+					req,
+					fmt.Sprintf("Pod %s restarted %d times – manual check recommended", // Alerting for manual intervention
+						pod.Name, cs.RestartCount),
+					corev1.EventTypeWarning,
+				)
 			}
 		}
 	}
 
-	// Take action depending on unhealthy pods
-	if len(unhealthyPods) > 0 {
-		for _, pod := range unhealthyPods {
-			restartCount := pod.Status.ContainerStatuses[0].RestartCount
-			podAge := time.Since(pod.ObjectMeta.CreationTimestamp.Time)
-
-			// If pod restart count exceeds 3 within short period, escalate & alert rather than trying again
-			if restartCount >= 3 && podAge < 5*time.Minute {
-				// Emit Kubernetes event, and set Redis.Status “Error”
-				log.Info("Pod is repeatedly unhealthy! Alerting!", "pod", pod.Name)
-				r.emitRedisEvent(ctx, req, fmt.Sprintf("Pod %s repeatedly unhealthy. Manual intervention required.", pod.Name), corev1.EventTypeWarning)
-				r.updateRedisCRStatus(ctx, req, "Degraded", fmt.Sprintf("Pod %s repeatedly unhealthy. Manual intervention required.", pod.Name))
-			} else {
-				// Try to recover automatically by deleting the unhealthy pod (deployment recreates pod)
-				log.Info("Deleting unhealthy pod for automatic recovery", "pod", pod.Name)
-				if err := r.Delete(ctx, &pod); err != nil {
-					log.Error(err, "Failed deleting unhealthy pod", "pod", pod.Name)
-					continue
-				}
-				r.emitRedisEvent(ctx, req, fmt.Sprintf("Deleted unhealthy Pod %s for automated recovery", pod.Name), corev1.EventTypeNormal)
-			}
-		}
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-	}
 	desired := redis.Spec.Replicas
 	isReady := deployment.Status.ReadyReplicas == desired
 	if isReady {
@@ -356,15 +338,13 @@ func (r *RedisReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// generateRandomPassword returns a slice with 32 random bytes
-// (256-bit entropy).  The caller decides how to encode it.
-func generateRandomPassword() ([]byte, error) {
-	const bytesLen = 32 // 32*8 = 256 bits
-	raw := make([]byte, bytesLen)
+// 32 random bytes + URL-safe base-64 encoding (43 chars, no ‘=’ padding)
+func generateRandomPassword() (string, error) {
+	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
-		return nil, err
+		return "", err
 	}
-	return raw, nil
+	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
 // deploymentForRedis returns a Redis Deployment object
@@ -379,32 +359,18 @@ func (r *RedisReconciler) deploymentForRedis(ctx context.Context, redis *cachev1
 	container := corev1.Container{
 		Name:  "redis",
 		Image: redis.Spec.Image,
-		Ports: []corev1.ContainerPort{
-			{ContainerPort: 6379},
-		},
+
 		Env: []corev1.EnvVar{
-			// plain env-var for backward compatibility
 			{
 				Name: "REDIS_PASSWORD",
 				ValueFrom: &corev1.EnvVarSource{
 					SecretKeyRef: &corev1.SecretKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
-						Key:                  "password",
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: secretName,
+						},
+						Key: "password",
 					},
 				},
-			},
-			// *_FILE convention that bitnami/redis also supports
-			{
-				Name:  "REDIS_PASSWORD_FILE",
-				Value: filepath.Join(redisSecretMountPath, "password"),
-			},
-		},
-
-		VolumeMounts: []corev1.VolumeMount{
-			{
-				Name:      redisSecretVolume,
-				MountPath: redisSecretMountPath,
-				ReadOnly:  true,
 			},
 		},
 		ReadinessProbe: &corev1.Probe{
@@ -475,16 +441,6 @@ func (r *RedisReconciler) deploymentForRedis(ctx context.Context, redis *cachev1
 				},
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{container},
-					Volumes: []corev1.Volume{
-						{
-							Name: redisSecretVolume,
-							VolumeSource: corev1.VolumeSource{
-								Secret: &corev1.SecretVolumeSource{
-									SecretName: secretName,
-								},
-							},
-						},
-					},
 				},
 			},
 		},

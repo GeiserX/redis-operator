@@ -106,6 +106,7 @@ spec:
               replicas:
                 description: Number of Redis instances to deploy
                 format: int32
+                maximum: 100
                 minimum: 1
                 type: integer
               resources:

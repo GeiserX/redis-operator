@@ -24,6 +24,7 @@ import (
 type RedisSpec struct {
 	// Number of Redis instances to deploy
 	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
 	Replicas int32 `json:"replicas"`
 	// Docker image to deploy, defaults to bitnami/redis:8.0
 	// +optional
