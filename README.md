@@ -18,12 +18,12 @@ Prerequisites: a working `kubectl` context, `kubectl apply` permissions and Kube
 
 ### 1) Install CRDs and Operator in your Kubernetes Cluster:
 
-#### Option A - apply published manifest (no clone required):
+**Option A** - apply published manifest (no clone required):
 ```bash
 kubectl apply -f https://raw.githubusercontent.com/GeiserX/redis-operator/config/deploy-redis-operator.yaml
 ```
 
-#### Option B - build & deploy from source:
+**Option B** - build & deploy from source:
 ```bash
 git clone https://github.com/GeiserX/redis-operator.git
 cd redis-operator
@@ -95,18 +95,18 @@ kubectl apply -f redis-cr.yaml
 
 ### Check the status of the Redis instance
 
-Confirm that Redis is up:
+Confirm that Redis is up (if name and namespace are as default):
 
 ```bash
 kubectl get redis redis-demo
-kubectl get deploy,po -l app=redis-demo -w # If deployed to the "default" namespace
+kubectl get deploy,po -l app=redis-demo -w 
 ```
 
 ### Check the password
 To retrieve the password in use:
 
 ```bash
-kubectl get secret my-redis-secret -o jsonpath='{.data.password}' | base64 --decode # Again, supposing it's deployed in the "default" namespace
+kubectl get secret my-redis-secret -o jsonpath='{.data.password}' | base64 --decode
 ```
 
 ### Check E2E test locally
@@ -163,10 +163,10 @@ This Redis Operator is explicitly developed as a Proof-Of-Concept (PoC) demonstr
 
 ## Maintainers
 
-[@GeiserX](https://github.com/GeiserX).
+[@GeiserX](https://github.com/GeiserX)
 
 ## Contributing
 
-Feel free to dive in! [Open an issue](https://github.com/GeiserX/genieacs-docker/issues/new) or submit PRs.
+Feel free to dive in! [Open an issue](https://github.com/GeiserX/genieacs-docker/issues/new) or submit PRs. Currently, only the `dev` branch is used for development purposes, and `main` for releases.
 
-GenieACS-Docker follows the [Contributor Covenant](http://contributor-covenant.org/version/2/1/) Code of Conduct.
+Redis Operator (PoC) follows the [Contributor Covenant](http://contributor-covenant.org/version/2/1/) Code of Conduct.
