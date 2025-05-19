@@ -1,28 +1,67 @@
-# Redis Operator for Kubernetes
+# Redis Operator (Proof-of-Concept)
 
-The Redis Operator is a Proof-of-Concept Kubernetes Operator that manages Redis instances defined through Custom Resources (CR). It provides secure automated password management, controlled configuration of Redis deployments, persistent storage, resource management (CPU and Memory), and simple scaling operations.
+A lightweight Kubernetes Operator that manages single-node Redis instances defined through a Custom Resource (CR).
 
----
+Features
+---------
+* Automated, **immutable password** generation stored in a Secret
+* Declarative **CPU / memory requests & limits**
+* Simple **scaling** through `spec.replicas`
+* **Health watch** – emits a Warning event on the Redis CR when a Pod restarts
+  three or more times
+* Automatic clean-up via OwnerReferences (Deployments, Pods and Secret are
+  removed when the CR is deleted)
 
-## Quick Start (Setup Instructions)
+## Quick Start
+
+Prerequisites: a working `kubectl` context, `kubectl apply` permissions and Kubernetes between v1.26 and v1.33 (included).
 
 ### 1) Install CRDs and Operator in your Kubernetes Cluster:
 
+#### Option A - apply published manifest (no clone required):
 ```bash
 kubectl apply -f https://raw.githubusercontent.com/GeiserX/redis-operator/config/deploy-redis-operator.yaml
 ```
+
+#### Option B - build & deploy from source:
+```bash
+git clone https://github.com/GeiserX/redis-operator.git
+cd redis-operator
+make docker-build IMG=docker.io/<user>/redis-operator:<tag>
+make deploy      IMG=docker.io/<user>/redis-operator:<tag>
+```
+
+Or use my prebuild image (`latest` always available too):
+```bash
+make deploy IMG=docker.io/drumsergio/redis-operator:0.0.1
+```
+
+---
+In any case: Verify that the controller manager pod is running:
+```bash
+kubectl -n redis-operator-system get pods
+```
+
 ### 2) Deploy a Redis instance (Example Redis CR):
 
-Create a file `redis-cr.yaml` with the following contents:
+Create a file `redis-cr.yaml` with the following contents, as an example:
 
 ```yaml
 apiVersion: cache.geiser.cloud/v1alpha1
 kind: Redis
 metadata:
-  name: my-redis
+  name: redis-demo
   namespace: default
+  labels:
+    app.kubernetes.io/name: redis-demo
 spec:
-  replicas: 3
+  # ────────────── scale ──────────────
+  replicas: 1
+
+  # ───────────── image ──────────────
+  image: bitnami/redis:8.0
+
+  # ───────── resource requests / limits ─────────
   resources:
     requests:
       cpu: "200m"
@@ -30,6 +69,21 @@ spec:
     limits:
       cpu: "500m"
       memory: "512Mi"
+
+  # ───────── probes ─────────
+  probes:
+    liveness:
+      command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" PING"]
+      initialDelaySeconds: 20
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 5
+    readiness:
+      command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" SET readiness_probe OK"]
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 3
 ```
 
 And then apply:
@@ -37,58 +91,75 @@ And then apply:
 kubectl apply -f redis-cr.yaml
 ```
 
-## Feature set
+## Checks
 
-### Automated Password Management
-Operator generates a robust random password for Redis when creating the related deployment. Stores secure passwords inside Kubernetes Secrets by default named <redis-name>-secret. It is used by then by the Redis deployment.
+### Check the status of the Redis instance
 
-Retrieve the password for your application explicitly with:
+Confirm that Redis is up:
 
 ```bash
-kubectl get secret my-redis-secret -n default -o jsonpath='{.data.password}' | base64 --decode
+kubectl get redis redis-demo
+kubectl get deploy,po -l app=redis-demo -w # If deployed to the "default" namespace
 ```
 
-### Scaling
-The Operator supports replica scaling (Please check the Scaling Limitations section below):
+### Check the password
+To retrieve the password in use:
+
 ```bash
-kubectl patch redis my-redis -n default --type merge -p='{"spec":{"replicas": 3}}'
+kubectl get secret my-redis-secret -o jsonpath='{.data.password}' | base64 --decode # Again, supposing it's deployed in the "default" namespace
 ```
-Or reapply the modified CR.
 
-### Managing Resource Requests and Limits
-The Redis operator lets you explicitly define CPU and Memory limits and requests
+### Check E2E test locally
+Optionally, you could test the instance locally with `redis-cli`, including more tests on your side:
+```bash
+# port-forward a Redis pod on 6379
+kubectl port-forward deploy/my-redis-deployment 6379:6379 &
+redis-cli -a "$(kubectl get secret my-redis-secret -o jsonpath='{.data.password}' | base64 --decode)" PING
+```
 
-### Automatic cleanup
-All Kubernetes resources (Deployments, Secrets, PVC) explicitly auto-cleaned by Kubernetes via ownership references.
+## Updating a Redis Instance
 
-## Limitations
+Increasing replicas (e.g. to 3):
 
-This Redis Operator is explicitly developed as a Proof-Of-Concept (PoC) demonstrating Kubernetes Operator patterns. It has explicit limitations clearly stated:
+```bash
+kubectl patch redis my-redis --type merge -p='{"spec":{"replicas":3}}'
+```
+You could also edit the Redis CR and reapply.
 
-- Scaling Limitations: Explicitly scales by adding/removing independent Redis Pods.
+Changing CPU limits (e.g. to 1):
 
-- Explicitly DOES NOT provision Redis Clusters or implement highly available Redis (no Redis Sentinel or Redis Cluster).
+```bash
+kubectl patch redis my-redis --type merge -p='{"spec":{"resources":{"limits":{"cpu":"1"}}}}'
+```
 
-- Lack of Data Replication: Redis pods run standalone—NO Sentinel, No automatic redis data replication or HA. Explicitly recommend for lightweight tests, demos only—not production workloads.
+## Operator health watch
+
+If any Redis pod restarts three or more times the operator emits a Warning event on the Redis CR:
+
+```bash
+kubectl get events --field-selector involvedObject.kind=Redis
+```
 
 ## Tests
 
-The Redis-Operator project includes several automated unit and integration tests to ensure correctness, robustness, and reliable behavior of the operator.
-
-### Before You Start
-
-Make sure exactly you installed the Operator Framework test environment (envtest) dependencies.
-
+If you would like to execute the tests, make sure exactly you already installed the Operator Framework CLI tooling and execute the following:
 ```bash
 make envtest
 export KUBEBUILDER_ASSETS="$(pwd)/bin/k8s/$(go env GOOS)/$(go env GOARCH)"
-```
-
-### Unit + Integration Tests
-
-```bash
 make test
 ```
+
+## Limitations
+
+This Redis Operator is explicitly developed as a Proof-Of-Concept (PoC) demonstrating Kubernetes Operator patterns. It has limitations as stated:
+
+- Scaling Limitations: Explicitly scales by adding/removing independent Redis Pods.
+
+- It DOES NOT provision Redis Clusters or implement highly available Redis (no Redis Sentinel or Redis Cluster).
+
+- PVC / persistence, Service, Ingresses, Autoscaling, Observability is not included in this PoC
+
+- Verified with Bitnami Redis 6.2, 7.2 and 8.0 images. Other images or major versions should work but are untested.
 
 ## Maintainers
 
