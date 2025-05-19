@@ -232,9 +232,14 @@ rules:
     resources: ["pods"]
     verbs: ["get","list","watch"]
 
-  # Secrets
+  # Secrets  (cluster-scoped list/watch)
   - apiGroups: [""]
     resources: ["secrets"]
+    verbs: ["get","list","watch","create","update","patch"]
+
+  # Events  ← NEW: allow the operator to record events
+  - apiGroups: [""]
+    resources: ["events"]
     verbs: ["get","list","watch","create","update","patch"]
 
   # Leader-election
