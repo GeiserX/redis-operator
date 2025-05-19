@@ -4,12 +4,12 @@ A lightweight Kubernetes Operator that manages single-node Redis instances defin
 
 Features
 ---------
-* Automated, **immutable password** generation stored in a Secret
+* Automated, **immutable, secure password** generation stored in a Secret
 * Declarative **CPU / memory requests & limits**
 * Simple **scaling** through `spec.replicas`
 * **Health watch** – emits a Warning event on the Redis CR when a Pod restarts
   three or more times
-* Automatic clean-up via OwnerReferences (Deployments, Pods and Secret are
+* Automatic **clean-up** via OwnerReferences (Deployments, Pods and Secret are
   removed when the CR is deleted)
 
 ## Quick Start
@@ -36,8 +36,7 @@ Or use my prebuild image (`latest` always available too):
 make deploy IMG=docker.io/drumsergio/redis-operator:0.0.1
 ```
 
----
-In any case: Verify that the controller manager pod is running:
+**In any case***: Verify that the controller manager pod is running:
 ```bash
 kubectl -n redis-operator-system get pods
 ```
@@ -109,8 +108,8 @@ To retrieve the password in use:
 kubectl get secret my-redis-secret -o jsonpath='{.data.password}' | base64 --decode
 ```
 
-### Check E2E test locally
-Optionally, you could test the instance locally with `redis-cli`, including more tests on your side:
+### Check working condition locally
+Optionally, you could test the instance locally with `redis-cli`, possibly including more tests on your side:
 ```bash
 # port-forward a Redis pod on 6379
 kubectl port-forward deploy/my-redis-deployment 6379:6379 &
@@ -153,9 +152,9 @@ make test
 
 This Redis Operator is explicitly developed as a Proof-Of-Concept (PoC) demonstrating Kubernetes Operator patterns. It has limitations as stated:
 
-- Scaling Limitations: Explicitly scales by adding/removing independent Redis Pods.
+- Scaling Limitations: It scales by adding/removing independent Redis Pods.
 
-- It DOES NOT provision Redis Clusters or implement highly available Redis (no Redis Sentinel or Redis Cluster).
+- It does not provision Redis Clusters or implement highly available Redis (no Redis Sentinel or Redis Cluster).
 
 - PVC / persistence, Service, Ingresses, Autoscaling, Observability is not included in this PoC
 
