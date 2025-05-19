@@ -1,9 +1,38 @@
 apiVersion: cache.geiser.cloud/v1alpha1
 kind: Redis
 metadata:
-  labels:
-    app.kubernetes.io/name: redis-operator
-    app.kubernetes.io/managed-by: kustomize
   name: redis-sample
+  namespace: default
+  labels:
+    app.kubernetes.io/name: redis-sample
+    app.kubernetes.io/managed-by: kustomize
 spec:
-  # TODO(user): Add fields here
+  # ────────────── scale ──────────────
+  replicas: 1
+
+  # ───────────── image ──────────────
+  image: bitnami/redis:8.0
+
+  # ───────── resource requests / limits ─────────
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "250m"
+      memory: "256Mi"
+
+  # ───────── probes (optional) ─────────
+  probes:
+    liveness:
+      command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" PING"]
+      initialDelaySeconds: 20
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 5
+    readiness:
+      command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" SET readiness_probe OK"]
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 3
