@@ -31,6 +31,9 @@ type RedisSpec struct {
 	// Resources defines resource requests and limits
 	// +optional
 	Resources ResourceSpec `json:"resources,omitempty"`
+	// Add Probe Config
+	// +optional
+	Probes ProbeSpec `json:"probes,omitempty"`
 }
 
 // ResourceSpec defines CPU and memory requests/limits
@@ -45,17 +48,45 @@ type ResourceList struct {
 	Memory string `json:"memory,omitempty"`
 }
 
+// ProbeSpec defines settings for readiness/liveness probes
+type ProbeSpec struct {
+	// +optional
+	Readiness ProbeConfig `json:"readiness,omitempty"`
+	// +optional
+	Liveness ProbeConfig `json:"liveness,omitempty"`
+}
+
+// ProbeConfig defines individual probe settings
+type ProbeConfig struct {
+	// Custom command to execute for the probe
+	// +optional
+	Command []string `json:"command,omitempty"`
+	// +optional
+	InitialDelaySeconds int32 `json:"initialDelaySeconds,omitempty"`
+	// +optional
+	PeriodSeconds int32 `json:"periodSeconds,omitempty"`
+	// +optional
+	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
+	// +optional
+	FailureThreshold int32 `json:"failureThreshold,omitempty"`
+}
+
 // RedisStatus defines the observed state of Redis
 type RedisStatus struct {
-	Nodes   []string `json:"nodes,omitempty"`
-	Status  string   `json:"status,omitempty"`
-	Message string   `json:"message,omitempty"`
+	Nodes      []string           `json:"nodes,omitempty"`
+	Status     string             `json:"status,omitempty"`
+	Message    string             `json:"message,omitempty"`
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:shortName=red
 // +kubebuilder:subresource:status
 // Redis is the Schema for the redis API
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=".status.conditions[?(@.type=='Ready')].status"
+// +kubebuilder:printcolumn:name="Pass",type=string,JSONPath=".status.conditions[?(@.type=='PasswordGenerated')].status"
+// +kubebuilder:printcolumn:name="Deploy",type=string,JSONPath=".status.conditions[?(@.type=='DeploymentReady')].status"
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 type Redis struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -97,5 +128,40 @@ func (r *Redis) SetDefaults() {
 	}
 	if r.Spec.Resources.Limits.Memory == "" {
 		r.Spec.Resources.Limits.Memory = "256Mi"
+	}
+	// Liveness default command
+	if len(r.Spec.Probes.Liveness.Command) == 0 {
+		r.Spec.Probes.Liveness.Command = []string{"sh", "-c", `redis-cli -a "$REDIS_PASSWORD" PING`}
+	}
+	// Liveness timing defaults
+	if r.Spec.Probes.Liveness.InitialDelaySeconds == 0 {
+		r.Spec.Probes.Liveness.InitialDelaySeconds = 20
+	}
+	if r.Spec.Probes.Liveness.PeriodSeconds == 0 {
+		r.Spec.Probes.Liveness.PeriodSeconds = 10
+	}
+	if r.Spec.Probes.Liveness.TimeoutSeconds == 0 {
+		r.Spec.Probes.Liveness.TimeoutSeconds = 3
+	}
+	if r.Spec.Probes.Liveness.FailureThreshold == 0 {
+		r.Spec.Probes.Liveness.FailureThreshold = 3
+	}
+
+	// Readiness default command
+	if len(r.Spec.Probes.Readiness.Command) == 0 {
+		r.Spec.Probes.Readiness.Command = []string{"sh", "-c", `redis-cli -a "$REDIS_PASSWORD" SET readiness_probe OK`}
+	}
+	// Readiness timing defaults
+	if r.Spec.Probes.Readiness.InitialDelaySeconds == 0 {
+		r.Spec.Probes.Readiness.InitialDelaySeconds = 5
+	}
+	if r.Spec.Probes.Readiness.PeriodSeconds == 0 {
+		r.Spec.Probes.Readiness.PeriodSeconds = 15
+	}
+	if r.Spec.Probes.Readiness.TimeoutSeconds == 0 {
+		r.Spec.Probes.Readiness.TimeoutSeconds = 4
+	}
+	if r.Spec.Probes.Readiness.FailureThreshold == 0 {
+		r.Spec.Probes.Readiness.FailureThreshold = 3
 	}
 }
