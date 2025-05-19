@@ -359,7 +359,13 @@ func (r *RedisReconciler) deploymentForRedis(ctx context.Context, redis *cachev1
 	container := corev1.Container{
 		Name:  "redis",
 		Image: redis.Spec.Image,
-
+		Ports: []corev1.ContainerPort{
+			{
+				Name:          "redis",
+				ContainerPort: 6379,
+				Protocol:      corev1.ProtocolTCP,
+			},
+		},
 		Env: []corev1.EnvVar{
 			{
 				Name: "REDIS_PASSWORD",

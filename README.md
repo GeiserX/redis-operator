@@ -156,7 +156,11 @@ This Redis Operator is explicitly developed as a Proof-Of-Concept (PoC) demonstr
 
 - It does not provision Redis Clusters or implement highly available Redis (no Redis Sentinel or Redis Cluster).
 
-- PVC / persistence, Service, Ingresses, Autoscaling, Observability is not included in this PoC
+- PVC / persistence, Service, Ingresses, TLS, Autoscaling, Observability is not included in this PoC
+
+- StatefulSet not implemented as it was only a PoC
+
+- Cleanup based in OwnerReference instead of finalizers (if it is removed, the K8s garbage collector will not delete it)
 
 - Verified with Bitnami Redis 6.2, 7.2 and 8.0 images. Other images or major versions should work but are untested.
 

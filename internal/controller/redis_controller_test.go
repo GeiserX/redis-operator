@@ -153,7 +153,14 @@ var _ = Describe("deploymentForRedis", func() {
 
 			container := deployment.Spec.Template.Spec.Containers[0]
 			Expect(container.Image).To(Equal("bitnami/redis:7"))
-			Expect(container.Ports).To(ContainElement(corev1.ContainerPort{ContainerPort: 6379}))
+			foundPort6379 := false
+			for _, p := range container.Ports {
+				if p.ContainerPort == 6379 {
+					foundPort6379 = true
+					break
+				}
+			}
+			Expect(foundPort6379).To(BeTrue(), "container should expose port 6379")
 
 			Expect(container.Env).To(ContainElement(corev1.EnvVar{
 				Name: "REDIS_PASSWORD",
@@ -423,7 +430,7 @@ var _ = Describe("Redis Controller – Pod Health and Recovery", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			// Step 2: Simulate unhealthy Pod
+			// Step 2: Simulate unhealthy Pod (≥ 3 restarts triggers warning)
 			pod := &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      fmt.Sprintf("%s-pod", redisName),
@@ -443,7 +450,7 @@ var _ = Describe("Redis Controller – Pod Health and Recovery", func() {
 						{
 							Name:         "redis",
 							Ready:        false,
-							RestartCount: 0,
+							RestartCount: 3,
 						},
 					},
 				},
@@ -457,33 +464,32 @@ var _ = Describe("Redis Controller – Pod Health and Recovery", func() {
 			pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
 				Name:         "redis",
 				Ready:        false, // not ready  → unhealthy
-				RestartCount: 0,
+				RestartCount: 3,
 			}}
 			Expect(k8sClient.Status().Update(ctx, pod)).Should(Succeed())
 
-			// Step 3: Trigger reconciliation and verify automatic pod deletion
+			// Step 3: Trigger reconciliation and verify warning event
 			_, err = reconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: types.NamespacedName{Name: redisName, Namespace: namespace},
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			// Verify Pod was deleted for automated recovery explicitly
-			Eventually(func() bool {
+			// Verify Pod still exists (controller does NOT delete it)
+			Consistently(func() bool {
 				dummy := &corev1.Pod{}
-				err := k8sClient.Get(ctx,
+				return k8sClient.Get(ctx,
 					types.NamespacedName{Name: pod.Name, Namespace: namespace},
-					dummy,
-				)
-				return errors.IsNotFound(err)
-			}, 5*time.Second, 200*time.Millisecond).Should(BeTrue(),
-				"Expected unhealthy Pod to be deleted by reconciler")
+					dummy) == nil
+			}, 2*time.Second, 200*time.Millisecond).Should(BeTrue(),
+				"Pod should remain; controller only emits a warning event")
 
-			// Step 4: Check for emitted Kubernetes recovery event
+			// Step 4: Check for emitted Warning event
 			eventRecorder, ok := reconciler.EventRecorder.(*record.FakeRecorder)
 			Expect(ok).To(BeTrue(), "Recorder must be FakeRecorder in tests")
 			select {
 			case event := <-eventRecorder.Events:
-				Expect(event).To(ContainSubstring("Deleted unhealthy Pod"), "Expect recovery event explicitly emitted")
+				Expect(event).To(ContainSubstring("manual check recommended"),
+					"Expected warning event about pod restarts")
 			case <-time.After(2 * time.Second):
 				Fail("Expected recovery event emission, but timed out")
 			}

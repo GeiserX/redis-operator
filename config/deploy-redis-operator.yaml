@@ -1,200 +1,210 @@
----
-# CRD
+# ────────────────────────────────────────────────────────────────────────────
+# CustomResourceDefinition  ─ cache.geiser.cloud/v1alpha1, Kind=Redis
+# ────────────────────────────────────────────────────────────────────────────
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
+  name: redis.cache.geiser.cloud
   annotations:
     controller-gen.kubebuilder.io/version: v0.16.1
-  name: redis.cache.geiser.cloud
 spec:
   group: cache.geiser.cloud
+  scope: Namespaced
   names:
+    plural: redis
+    singular: redis
     kind: Redis
     listKind: RedisList
-    plural: redis
     shortNames:
-    - red
-    singular: redis
-  scope: Namespaced
+      - red
   versions:
-  - name: v1alpha1
-    schema:
-      openAPIV3Schema:
-        description: Redis is the Schema for the redis API
-        properties:
-          apiVersion:
-            description: |-
-              APIVersion defines the versioned schema of this representation of an object.
-              Servers should convert recognized schemas to the latest internal value, and
-              may reject unrecognized values.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-            type: string
-          kind:
-            description: |-
-              Kind is a string value representing the REST resource this object represents.
-              Servers may infer this from the endpoint the client submits requests to.
-              Cannot be updated.
-              In CamelCase.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-            type: string
-          metadata:
-            type: object
-          spec:
-            description: RedisSpec defines the desired state of Redis
-            properties:
-              image:
-                description: Docker image to deploy, defaults to bitnami/redis:8.0
-                type: string
-              persistence:
-                description: Storage enables persistence - If Point-in-time snapshots
-                  are there
-                properties:
-                  enabled:
-                    type: boolean
-                  size:
-                    type: string
-                  storageClass:
-                    type: string
-                type: object
-              replicas:
-                description: Number of Redis instances to deploy
-                format: int32
-                minimum: 1
-                type: integer
-              resources:
-                description: Resources defines resource requests and limits
-                properties:
-                  limits:
-                    description: ResourceList details resource units
-                    properties:
-                      cpu:
-                        type: string
-                      memory:
-                        type: string
-                    type: object
-                  requests:
-                    description: ResourceList details resource units
-                    properties:
-                      cpu:
-                        type: string
-                      memory:
-                        type: string
-                    type: object
-                type: object
-            required:
-            - replicas
-            type: object
-          status:
-            description: RedisStatus defines the observed state of Redis
-            properties:
-              message:
-                type: string
-              nodes:
-                items:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Ready
+          jsonPath: .status.conditions[?(@.type=="Ready")].status
+          type: string
+        - name: Pass
+          jsonPath: .status.conditions[?(@.type=="PasswordGenerated")].status
+          type: string
+        - name: Deploy
+          jsonPath: .status.conditions[?(@.type=="DeploymentReady")].status
+          type: string
+        - name: Age
+          jsonPath: .metadata.creationTimestamp
+          type: date
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: Redis is the Schema for the Redis API
+          properties:
+            apiVersion:
+              type: string
+              description: Standard Kubernetes field.
+            kind:
+              type: string
+              description: Standard Kubernetes field.
+            metadata:
+              type: object
+            spec:
+              type: object
+              required:
+                - replicas
+              properties:
+                replicas:
+                  type: integer
+                  format: int32
+                  minimum: 1
+                  maximum: 100
+                  description: Number of Redis Pods to run
+                image:
                   type: string
-                type: array
-              status:
-                type: string
-            type: object
-        type: object
-    served: true
-    storage: true
-    subresources:
-      status: {}
+                  description: Docker image (defaults to bitnami/redis:8.0)
+                resources:
+                  type: object
+                  description: CPU / memory requests & limits
+                  properties:
+                    requests:
+                      type: object
+                      properties:
+                        cpu:
+                          type: string
+                        memory:
+                          type: string
+                    limits:
+                      type: object
+                      properties:
+                        cpu:
+                          type: string
+                        memory:
+                          type: string
+                probes:
+                  type: object
+                  description: Liveness / readiness probe configuration
+                  properties:
+                    liveness:
+                      $ref: "#/components/schemas/ProbeCfg"
+                    readiness:
+                      $ref: "#/components/schemas/ProbeCfg"
+            status:
+              type: object
+              description: Observed state of Redis
+              properties:
+                nodes:
+                  type: array
+                  items:
+                    type: string
+                status:
+                  type: string
+                message:
+                  type: string
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                      - reason
+                      - message
+                      - lastTransitionTime
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                        minimum: 0
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+          components:
+            schemas:
+              ProbeCfg:
+                type: object
+                properties:
+                  command:
+                    type: array
+                    items:
+                      type: string
+                  initialDelaySeconds:
+                    type: integer
+                    format: int32
+                  periodSeconds:
+                    type: integer
+                    format: int32
+                  timeoutSeconds:
+                    type: integer
+                    format: int32
+                  failureThreshold:
+                    type: integer
+                    format: int32
 ---
-# RBAC Role
+# ────────────────────────────────────────────────────────────────────────────
+# RBAC  (ClusterRole)
+# ────────────────────────────────────────────────────────────────────────────
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: manager-role
+  name: redis-operator-manager-role
 rules:
-  - apiGroups:
-      - cache.geiser.cloud
+  # Manage Redis CR
+  - apiGroups: ["cache.geiser.cloud"]
     resources:
       - redis
       - redis/finalizers
       - redis/status
-    verbs:
-      - create
-      - delete
-      - get
-      - list
-      - patch
-      - update
-      - watch
-  - apiGroups: [""]
-    resources:
-      - secrets
-      - persistentvolumeclaims
-      - pods
-      - services
-      - events
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - update
-      - patch
-      - delete
+    verbs: ["get","list","watch","create","update","patch","delete"]
+
+  # Deployments + Pods
   - apiGroups: ["apps"]
     resources: ["deployments"]
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - update
-      - patch
-      - delete
+    verbs: ["get","list","watch","create","update","patch","delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get","list","watch"]
+
+  # Leader-election
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - update
-      - patch
-      - delete
-  - apiGroups: [""]
-    resources:
-      - persistentvolumeclaims
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - update
-      - patch
-      - delete
+    verbs: ["get","list","watch","create","update","patch"]
 ---
-### RBAC RoleBinding
+# ────────────────────────────────────────────────────────────────────────────
+# RBAC  (ClusterRoleBinding)
+# ────────────────────────────────────────────────────────────────────────────
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  labels:
-    app.kubernetes.io/name: redis-operator
-    app.kubernetes.io/managed-by: kustomize
-  name: manager-rolebinding
+  name: redis-operator-manager-rolebinding
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: manager-role
+  name: redis-operator-manager-role
 subjects:
-- kind: ServiceAccount
-  name: controller-manager
-  namespace: redis-operator-system
+  - kind: ServiceAccount
+    name: controller-manager
+    namespace: redis-operator-system
 ---
-# Manager
+# ────────────────────────────────────────────────────────────────────────────
+# Namespace & ServiceAccount
+# ────────────────────────────────────────────────────────────────────────────
 apiVersion: v1
 kind: Namespace
 metadata:
+  name: redis-operator-system
   labels:
     control-plane: controller-manager
     app.kubernetes.io/name: redis-operator
-    app.kubernetes.io/managed-by: kustomize
-  name: redis-operator-system  # changed from default
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -202,6 +212,9 @@ metadata:
   name: controller-manager
   namespace: redis-operator-system
 ---
+# ────────────────────────────────────────────────────────────────────────────
+# Operator Deployment
+# ────────────────────────────────────────────────────────────────────────────
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -210,25 +223,24 @@ metadata:
   labels:
     control-plane: controller-manager
     app.kubernetes.io/name: redis-operator
-    app.kubernetes.io/managed-by: kustomize
 spec:
+  replicas: 1
   selector:
     matchLabels:
       control-plane: controller-manager
-  replicas: 1
   template:
     metadata:
-      annotations:
-        kubectl.kubernetes.io/default-container: manager
       labels:
         control-plane: controller-manager
         app.kubernetes.io/name: redis-operator
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
     spec:
       serviceAccountName: controller-manager
       securityContext:
         runAsNonRoot: true
         seccompProfile:
-          type: RuntimeDefault # Recommended
+          type: RuntimeDefault
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -239,40 +251,38 @@ spec:
                     values: ["linux"]
                   - key: kubernetes.io/arch
                     operator: In
-                    values: ["amd64", "arm64"]
+                    values: ["amd64","arm64"]
+      terminationGracePeriodSeconds: 10
       containers:
         - name: manager
           image: drumsergio/redis-operator:0.0.1
           imagePullPolicy: Always
-          command:
-            - /manager
+          command: ["/manager"]
           args:
             - --leader-elect
             - --health-probe-bind-address=:8081
-            # - --metrics-bind-address=:8080 # Prometheus
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
           livenessProbe:
             httpGet:
               path: /healthz
               port: 8081
             initialDelaySeconds: 15
-            timeoutSeconds: 2
             periodSeconds: 20
+            timeoutSeconds: 2
           readinessProbe:
             httpGet:
               path: /readyz
               port: 8081
             initialDelaySeconds: 5
-            timeoutSeconds: 2
             periodSeconds: 10
-          resources:
-            limits:
-              cpu: 250m
-              memory: 128Mi
-            requests:
-              cpu: 50m
-              memory: 64Mi
-      terminationGracePeriodSeconds: 10
+            timeoutSeconds: 2
