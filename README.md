@@ -20,7 +20,7 @@ Prerequisites: a working `kubectl` context, `kubectl apply` permissions and Kube
 
 **Option A** - apply published manifest (no clone required):
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/GeiserX/redis-operator/config/deploy-redis-operator.yaml
+kubectl apply -f https://raw.githubusercontent.com/GeiserX/redis-operator/main/config/deploy-redis-operator.yaml
 ```
 
 **Option B** - build & deploy from source:
