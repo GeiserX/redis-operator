@@ -1,10 +1,10 @@
 apiVersion: cache.geiser.cloud/v1alpha1
 kind: Redis
 metadata:
-  name: redis-sample
+  name: redis-sample2
   namespace: default
   labels:
-    app.kubernetes.io/name: redis-sample
+    app.kubernetes.io/name: redis-sample2
     app.kubernetes.io/managed-by: kustomize
 spec:
   # ────────────── scale ──────────────
