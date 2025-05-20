@@ -1,0 +1,39 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+  # ──────────────────────────────────
+  # 1. Manage the Redis CR itself
+  # ──────────────────────────────────
+  - apiGroups: ["cache.geiser.cloud"]
+    resources: ["redis","redis/status","redis/finalizers"]
+    verbs: ["get","list","watch","create","update","patch","delete"]
+
+  # ──────────────────────────────────
+  # 2. Secrets → create / patch / read 
+  #    Events  → create / patch 
+  # ──────────────────────────────────
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs:     ["get","list","watch","create","update","patch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs:     ["get","list","watch","create","patch"]
+
+  # ──────────────────────────────────
+  # 3. Deployments (full CRUD) and Pods (read-only)
+  # ──────────────────────────────────
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get","list","watch","create","update","patch","delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get","list","watch"]
+
+  # ──────────────────────────────────
+  # 4. Leader-election Lease objects
+  # ──────────────────────────────────
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get","list","watch","create","update","patch"]
