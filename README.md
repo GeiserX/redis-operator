@@ -1,13 +1,23 @@
-# Redis Operator (Proof-of-Concept)
+<p align="center">
+  <img src="docs/images/banner.svg" alt="Redis Operator banner" width="900"/>
+</p>
+
+<h1 align="center">Redis Operator</h1>
+
+<p align="center">
+  Redis Operator for Kubernetes (Proof-of-Concept).
+</p>
+
+---
 
 A lightweight Kubernetes Operator that manages single-node Redis instances defined through a Custom Resource (CR).
 
-Features
----------
+## Features
+
 * Automated, **immutable, secure password** generation stored in a Secret
 * Declarative **CPU / memory requests & limits**
 * Simple **scaling** through `spec.replicas`
-* **Health watch** – emits a Warning event on the Redis CR when a Pod restarts
+* **Health watch** -- emits a Warning event on the Redis CR when a Pod restarts
   three or more times
 * Automatic **clean-up** via OwnerReferences (Deployments, Pods and Secret are
   removed when the CR is deleted)
@@ -98,7 +108,7 @@ Confirm that Redis is up (if name and namespace are as default):
 
 ```bash
 kubectl get redis redis-demo
-kubectl get deploy,po -l app=redis-demo -w 
+kubectl get deploy,po -l app=redis-demo -w
 ```
 
 ### Check the password
@@ -170,6 +180,6 @@ This Redis Operator is explicitly developed as a Proof-Of-Concept (PoC) demonstr
 
 ## Contributing
 
-Feel free to dive in! [Open an issue](https://github.com/GeiserX/genieacs-docker/issues/new) or submit PRs. Currently, only the `dev` branch is used for development purposes, and `main` for releases.
+Feel free to dive in! [Open an issue](https://github.com/GeiserX/redis-operator/issues/new) or submit PRs. Currently, only the `dev` branch is used for development purposes, and `main` for releases.
 
 Redis Operator (PoC) follows the [Contributor Covenant](http://contributor-covenant.org/version/2/1/) Code of Conduct.
