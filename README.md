@@ -5,6 +5,10 @@
 <h1 align="center">Redis Operator</h1>
 
 <p align="center">
+  <a href="https://codecov.io/gh/GeiserX/redis-operator"><img src="https://codecov.io/gh/GeiserX/redis-operator/graph/badge.svg" alt="codecov"/></a>
+</p>
+
+<p align="center">
   Redis Operator for Kubernetes (Proof-of-Concept).
 </p>
 
