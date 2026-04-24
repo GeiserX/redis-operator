@@ -285,7 +285,7 @@ func (r *RedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			return ctrl.Result{}, err
 		}
 		setCondition(redis, CondDeploymentReady,
-			metav1.ConditionFalse, "DeploymentError", err.Error())
+			metav1.ConditionFalse, "Updating", "Deployment resources updated, waiting for rollout")
 		reconcileReady(redis)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
