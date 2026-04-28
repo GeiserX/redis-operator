@@ -1,4 +1,4 @@
-# AGENTS.md — Redis Operator
+# CLAUDE.md — Redis Operator
 
 ## Project Overview
 
